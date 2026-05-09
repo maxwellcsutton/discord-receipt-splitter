@@ -631,10 +631,9 @@ async function handleThreadMessage(message: Message, client: Client): Promise<vo
   }
 
   if (contentClean.startsWith("split ") || contentClean.startsWith("s ")) {
-    // For split, mentions are participants — not proxy targets. Only the
-    // `as <name>` suffix can shift the acting user.
-    const splitActor = proxyByName?.proxyId ?? message.author.id;
-    await handleSplit(message, session, splitActor);
+    // For split, mentions are participants — not proxy targets, and the
+    // actor is never auto-included.
+    await handleSplit(message, session);
     return;
   }
 
@@ -956,7 +955,6 @@ async function handleRemoveItem(
 async function handleSplit(
   message: Message,
   session: ReceiptSession,
-  effectiveUserId: string,
 ): Promise<void> {
   // Tokenize the original content (with mentions intact) so we can pair
   // each `<@id>` with an optional following `NN%` percentage token.
@@ -1009,16 +1007,17 @@ async function handleSplit(
 
   const anyPct = explicit.some((p) => p.pct !== null);
 
-  let participants: { userId: string; pct: number | null }[];
-  if (!anyPct) {
-    // Even split — auto-include the actor.
-    const ids = [
-      effectiveUserId,
-      ...explicit.map((p) => p.userId).filter((id) => id !== effectiveUserId),
-    ];
-    participants = ids.map((id) => ({ userId: id, pct: null }));
-  } else {
-    const missingPct = explicit.filter((p) => p.pct === null);
+  // Dedupe by userId (keep the first occurrence's pct).
+  const seen = new Set<string>();
+  const participants: { userId: string; pct: number | null }[] = [];
+  for (const p of explicit) {
+    if (seen.has(p.userId)) continue;
+    seen.add(p.userId);
+    participants.push({ userId: p.userId, pct: p.pct });
+  }
+
+  if (anyPct) {
+    const missingPct = participants.filter((p) => p.pct === null);
     if (missingPct.length > 0) {
       const names = missingPct.map((p) => `<@${p.userId}>`).join(", ");
       await message.reply(
@@ -1026,33 +1025,18 @@ async function handleSplit(
       );
       return;
     }
-    const sum = explicit.reduce((s, p) => s + p.pct!, 0);
-    if (sum > 100.01) {
-      await message.reply(
-        `Percentages sum to ${sum.toFixed(2)}%, which exceeds 100%.`,
-      );
-      return;
-    }
-    const includesActor = explicit.some((p) => p.userId === effectiveUserId);
-    const remainder = 100 - sum;
-    if (remainder > 0.01 && !includesActor) {
-      participants = [
-        { userId: effectiveUserId, pct: Math.round(remainder * 100) / 100 },
-        ...explicit.map((p) => ({ userId: p.userId, pct: p.pct })),
-      ];
-    } else if (Math.abs(sum - 100) > 0.01) {
+    const sum = participants.reduce((s, p) => s + p.pct!, 0);
+    if (Math.abs(sum - 100) > 0.01) {
       await message.reply(
         `Percentages sum to ${sum.toFixed(2)}% but should sum to 100%.`,
       );
       return;
-    } else {
-      participants = explicit.map((p) => ({ userId: p.userId, pct: p.pct }));
     }
   }
 
   if (participants.length < 2) {
     await message.reply(
-      "Please mention at least one other user to split the item(s) with.",
+      "Please mention at least two users to split the item(s) between (the actor is no longer auto-included).",
     );
     return;
   }
