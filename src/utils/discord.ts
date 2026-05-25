@@ -38,7 +38,8 @@ export function extractRestaurantName(content: string, botId: string): string {
   return canonical ?? name;
 }
 
-import { Guild } from 'discord.js';
+import { Attachment, Guild } from 'discord.js';
+import { fileTypeFromBuffer } from 'file-type';
 
 export type DisplayNameResolver = (userId: string) => string;
 
@@ -79,12 +80,28 @@ export async function buildDisplayNameResolver(
   };
 }
 
-export function getImageMediaType(
-  contentType: string | null,
-): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null {
-  if (!contentType) return null;
-  const type = contentType.toLowerCase();
-  console.log('img content type ', contentType.toLowerCase());
+export async function getImageMediaType(
+  attachment: Attachment,
+): Promise<'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null> {
+  if (!attachment) return null;
+
+  if (!attachment) return null;
+
+  const response = await fetch(attachment.url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch attachment: ${response.status}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  const type = (await fileTypeFromBuffer(buffer))?.mime;
+
+  if (!type) return null;
+
+  console.log(type);
+
   switch (true) {
     default:
       return null;

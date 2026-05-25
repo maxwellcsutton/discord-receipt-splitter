@@ -1,27 +1,20 @@
-import {
-  Client,
-  Message,
-  TextChannel,
-  ThreadChannel,
-  ChannelType,
-  EmbedBuilder,
-} from "discord.js";
-import { randomUUID } from "crypto";
-import { config } from "../../config.js";
+import { Client, Message, TextChannel, ThreadChannel, ChannelType, EmbedBuilder } from 'discord.js';
+import { randomUUID } from 'crypto';
+import { config } from '../../config.js';
 import {
   parseReceiptImage,
   expandLineItems,
   validateReceipt,
   subtotalItemsDiff,
-} from "../../receipt/parser.js";
+} from '../../receipt/parser.js';
 import {
   buildSummaryEmbeds,
   buildUserEmbed,
   formatItemList,
   formatThreadHelp,
   formatChannelHelp,
-} from "../../receipt/formatter.js";
-import * as manager from "../../session/manager.js";
+} from '../../receipt/formatter.js';
+import * as manager from '../../session/manager.js';
 import {
   parseItemNumbers,
   extractRestaurantName,
@@ -30,11 +23,11 @@ import {
   DisplayNameResolver,
   isProxyUserId,
   makeProxyUserId,
-} from "../../utils/discord.js";
-import { ReceiptSession, UserTotal } from "../../receipt/types.js";
+} from '../../utils/discord.js';
+import { ReceiptSession, UserTotal } from '../../receipt/types.js';
 
 export function registerMessageCreateEvent(client: Client): void {
-  client.on("messageCreate", async (message: Message) => {
+  client.on('messageCreate', async (message: Message) => {
     if (message.author.bot) return;
 
     try {
@@ -53,41 +46,39 @@ export function registerMessageCreateEvent(client: Client): void {
       const content = message.content.toLowerCase();
 
       // Help command
-      if (content.includes("help")) {
+      if (content.includes('help')) {
         await message.reply(formatChannelHelp());
         return;
       }
 
       // Leaderboard command
-      if (content.includes("leaderboard")) {
+      if (content.includes('leaderboard')) {
         await handleLeaderboard(message);
         return;
       }
 
       // Add total command (manual leaderboard entry)
-      if (content.includes("addtotal")) {
+      if (content.includes('addtotal')) {
         await handleAddTotal(message);
         return;
       }
 
       // Sum command (check "sum paid" before "sum")
-      if (content.includes("sum paid")) {
+      if (content.includes('sum paid')) {
         await handleSum(message, client, true);
         return;
       }
-      if (content.includes("sum")) {
+      if (content.includes('sum')) {
         await handleSum(message, client, false);
         return;
       }
 
       // New receipt submission (bot mention + image attachment)
-      if (
-        message.attachments.some((a) => a.contentType?.startsWith("image/"))
-      ) {
+      if (message.attachments.some((a) => a.contentType?.startsWith('image/'))) {
         await handleNewReceipt(message, client);
       }
     } catch (err) {
-      console.error("Error handling message:", err);
+      console.error('Error handling message:', err);
       try {
         await message.reply(
           `OOPSIE WOOPSIE!! Uwu We make a fucky wucky!! A wittle fucko boingo! The code monkeys at our headquarters are working VEWY HAWD to fix this!`,
@@ -101,10 +92,7 @@ export function registerMessageCreateEvent(client: Client): void {
 
 // Returns a single proxy target for commands that act on behalf of one user
 // (claim, unclaim, split). Returns null if not applicable.
-function getProxyTarget(
-  message: Message,
-  session: ReceiptSession,
-): string | null {
+function getProxyTarget(message: Message, session: ReceiptSession): string | null {
   if (message.author.id !== session.primaryUserId) return null;
   const mentioned = message.mentions.users
     .filter((u) => !u.bot && u.id !== message.author.id)
@@ -136,10 +124,7 @@ function resolveProxySuffix(
 }
 
 // Returns all proxy targets for paid/unpaid, which can act on multiple users at once.
-function getProxyTargets(
-  message: Message,
-  session: ReceiptSession,
-): string[] | null {
+function getProxyTargets(message: Message, session: ReceiptSession): string[] | null {
   if (message.author.id !== session.primaryUserId) return null;
   const mentioned = message.mentions.users
     .filter((u) => !u.bot && u.id !== message.author.id)
@@ -169,48 +154,41 @@ async function getDisplayNameResolver(
 
 async function handleLeaderboard(message: Message): Promise<void> {
   if (!message.guildId) {
-    await message.reply("Leaderboard is only available in servers.");
+    await message.reply('Leaderboard is only available in servers.');
     return;
   }
 
   const { restaurants, users } = manager.getLeaderboard(message.guildId);
 
   if (restaurants.length === 0 && users.length === 0) {
-    await message.reply("No settled receipts yet — nothing to show.");
+    await message.reply('No settled receipts yet — nothing to show.');
     return;
   }
 
   const guild = message.guild!;
   const userIds = users.map((u) => u.userId);
   const displayName =
-    userIds.length > 0
-      ? await buildDisplayNameResolver(guild, userIds)
-      : (_id: string) => "Unknown";
+    userIds.length > 0 ? await buildDisplayNameResolver(guild, userIds) : (_id: string) => 'Unknown';
 
-  const embed = new EmbedBuilder()
-    .setTitle("🏆 Receipt Leaderboard")
-    .setColor(0x3498db);
+  const embed = new EmbedBuilder().setTitle('🏆 Receipt Leaderboard').setColor(0x3498db);
 
   if (restaurants.length > 0) {
     const lines = restaurants.map(
       (r, i) =>
-        `${i + 1}. **${r.restaurantName}** — $${r.totalSpend.toFixed(2)} (${r.receiptCount} receipt${r.receiptCount !== 1 ? "s" : ""})`,
+        `${i + 1}. **${r.restaurantName}** — $${r.totalSpend.toFixed(2)} (${r.receiptCount} receipt${r.receiptCount !== 1 ? 's' : ''})`,
     );
     embed.addFields({
-      name: "Top Restaurants by Spend",
-      value: lines.join("\n"),
+      name: 'Top Restaurants by Spend',
+      value: lines.join('\n'),
       inline: false,
     });
   }
 
   if (users.length > 0) {
-    const lines = users.map(
-      (u, i) =>
-        `${i + 1}. **${displayName(u.userId)}** — $${u.totalSpend.toFixed(2)}`,
-    );
+    const lines = users.map((u, i) => `${i + 1}. **${displayName(u.userId)}** — $${u.totalSpend.toFixed(2)}`);
     embed.addFields({
-      name: "Top Spenders",
-      value: lines.join("\n"),
+      name: 'Top Spenders',
+      value: lines.join('\n'),
       inline: false,
     });
   }
@@ -220,16 +198,14 @@ async function handleLeaderboard(message: Message): Promise<void> {
 
 async function handleAddTotal(message: Message): Promise<void> {
   if (!message.guildId || !message.guild) {
-    await message.reply("This command is only available in servers.");
+    await message.reply('This command is only available in servers.');
     return;
   }
 
   // Take everything after the "addtotal" keyword — the bot mention always precedes it
   const addtotalMatch = message.content.match(/addtotal\s*(.*)/is);
   if (!addtotalMatch) {
-    await message.reply(
-      "Usage: `@bot addtotal [restaurant] @user1 amount1 @user2 amount2`",
-    );
+    await message.reply('Usage: `@bot addtotal [restaurant] @user1 amount1 @user2 amount2`');
     return;
   }
   const afterKeyword = addtotalMatch[1].trim();
@@ -237,18 +213,16 @@ async function handleAddTotal(message: Message): Promise<void> {
   // Extract restaurant name: text before the first user mention
   const firstMentionPos = afterKeyword.search(/<@!?\d+>/);
   if (firstMentionPos === -1) {
-    await message.reply(
-      "Usage: `@bot addtotal [restaurant] @user1 amount1 @user2 amount2`",
-    );
+    await message.reply('Usage: `@bot addtotal [restaurant] @user1 amount1 @user2 amount2`');
     return;
   }
 
   const restaurantRaw = afterKeyword.slice(0, firstMentionPos).trim();
   if (!restaurantRaw) {
-    await message.reply("Please specify a restaurant name before the mentions.");
+    await message.reply('Please specify a restaurant name before the mentions.');
     return;
   }
-  const restaurantName = extractRestaurantName(restaurantRaw, "");
+  const restaurantName = extractRestaurantName(restaurantRaw, '');
 
   // Parse mention+amount pairs from the remainder
   const remainder = afterKeyword.slice(firstMentionPos);
@@ -264,7 +238,7 @@ async function handleAddTotal(message: Message): Promise<void> {
       await message.reply(`Missing amount after <@${userId}>.`);
       return;
     }
-    const amount = parseFloat(next.replace("$", ""));
+    const amount = parseFloat(next.replace('$', ''));
     if (isNaN(amount) || amount < 0) {
       await message.reply(`Invalid amount "${next}" after <@${userId}>.`);
       return;
@@ -274,7 +248,7 @@ async function handleAddTotal(message: Message): Promise<void> {
   }
 
   if (userAmounts.length === 0) {
-    await message.reply("Please mention at least one user with an amount.");
+    await message.reply('Please mention at least one user with an amount.');
     return;
   }
 
@@ -285,32 +259,23 @@ async function handleAddTotal(message: Message): Promise<void> {
     userAmounts.map((u) => u.userId),
   );
   const total = userAmounts.reduce((sum, u) => sum + u.grandTotal, 0);
-  const lines = userAmounts.map(
-    (u) => `  ${displayName(u.userId)}: $${u.grandTotal.toFixed(2)}`,
-  );
+  const lines = userAmounts.map((u) => `  ${displayName(u.userId)}: $${u.grandTotal.toFixed(2)}`);
 
   await message.reply(
-    `Added to leaderboard:\n**${restaurantName}** — $${total.toFixed(2)}\n${lines.join("\n")}`,
+    `Added to leaderboard:\n**${restaurantName}** — $${total.toFixed(2)}\n${lines.join('\n')}`,
   );
 }
 
-async function handleSum(
-  message: Message,
-  client: Client,
-  markPaid: boolean,
-): Promise<void> {
+async function handleSum(message: Message, client: Client, markPaid: boolean): Promise<void> {
   if (!message.guildId || !message.guild) {
-    await message.reply("The sum command is only available in servers.");
+    await message.reply('The sum command is only available in servers.');
     return;
   }
 
-  const sessions = manager.getUnpaidSessionsForUser(
-    message.guildId,
-    message.author.id,
-  );
+  const sessions = manager.getUnpaidSessionsForUser(message.guildId, message.author.id);
 
   if (sessions.length === 0) {
-    await message.reply("You have no unpaid items across any active receipts.");
+    await message.reply('You have no unpaid items across any active receipts.');
     return;
   }
 
@@ -322,15 +287,13 @@ async function handleSum(
   }
 
   if (sessionData.length === 0) {
-    await message.reply("You have no unpaid items across any active receipts.");
+    await message.reply('You have no unpaid items across any active receipts.');
     return;
   }
 
   const grandTotal = sessionData.reduce((sum, d) => sum + d.ut.grandTotal, 0);
 
-  const lines = sessionData.map(
-    (d) => `**${d.session.restaurantName}** — $${d.ut.grandTotal.toFixed(2)}`,
-  );
+  const lines = sessionData.map((d) => `**${d.session.restaurantName}** — $${d.ut.grandTotal.toFixed(2)}`);
   lines.push(`\n**Grand Total: $${grandTotal.toFixed(2)}**`);
 
   if (markPaid) {
@@ -347,28 +310,16 @@ async function handleSum(
         const refreshedSession = manager.getSession(session.threadId);
         if (!refreshedSession) continue;
 
-        const displayName = await buildDisplayNameResolver(
-          thread.guild,
-          refreshedSession.taggedUserIds,
-        );
+        const displayName = await buildDisplayNameResolver(thread.guild, refreshedSession.taggedUserIds);
         const items = manager.getItems(session.id);
         const userTotals = manager.getUserTotals(refreshedSession);
         const payments = manager.getPaymentStatuses(session.id);
         const splits = manager.getSplits(session.id);
-        const embeds = buildSummaryEmbeds(
-          refreshedSession,
-          items,
-          userTotals,
-          payments,
-          splits,
-          displayName,
-        );
+        const embeds = buildSummaryEmbeds(refreshedSession, items, userTotals, payments, splits, displayName);
 
         if (session.summaryMessageId) {
           try {
-            const summaryMsg = await thread.messages.fetch(
-              session.summaryMessageId,
-            );
+            const summaryMsg = await thread.messages.fetch(session.summaryMessageId);
             await summaryMsg.edit({ embeds });
           } catch {
             const newMsg = await thread.send({ embeds });
@@ -379,11 +330,7 @@ async function handleSum(
         const { allPaid } = manager.checkAllClaimedAndPaid(refreshedSession);
         if (allPaid) {
           const primaryName = displayName(session.primaryUserId);
-          manager.recordSettlement(
-            session.guildId,
-            session.restaurantName,
-            userTotals,
-          );
+          manager.recordSettlement(session.guildId, session.restaurantName, userTotals);
           await thread.send(
             `🎉 **${primaryName}** — All payments for **${session.restaurantName}** have been received!`,
           );
@@ -408,65 +355,49 @@ async function handleSum(
     }
 
     const embed = new EmbedBuilder()
-      .setTitle("✅ Marked as Paid")
+      .setTitle('✅ Marked as Paid')
       .setColor(0x2ecc71)
-      .setDescription(lines.join("\n"));
+      .setDescription(lines.join('\n'));
     await message.reply({ embeds: [embed] });
   } else {
     const embed = new EmbedBuilder()
-      .setTitle("💰 Your Unpaid Totals")
+      .setTitle('💰 Your Unpaid Totals')
       .setColor(0xe74c3c)
-      .setDescription(
-        lines.join("\n") + "\n\nReply `@bot sum paid` to mark all as paid.",
-      );
+      .setDescription(lines.join('\n') + '\n\nReply `@bot sum paid` to mark all as paid.');
     await message.reply({ embeds: [embed] });
   }
 }
 
-async function handleNewReceipt(
-  message: Message,
-  client: Client,
-): Promise<void> {
-  const attachment = message.attachments.find((a) =>
-    a.contentType?.startsWith("image/"),
-  );
+async function handleNewReceipt(message: Message, client: Client): Promise<void> {
+  const attachment = message.attachments.find((a) => a.contentType?.startsWith('image/'));
   if (!attachment) {
-    await message.reply("Please include a receipt image in your message.");
+    await message.reply('Please include a receipt image in your message.');
     return;
   }
 
-  const mediaType = getImageMediaType(attachment.contentType);
+  const mediaType = await getImageMediaType(attachment);
   if (!mediaType) {
-    await message.reply(
-      "Unsupported image format. Please use JPEG, PNG, GIF, or WebP.",
-    );
+    await message.reply('Unsupported image format. Please use JPEG, PNG, GIF, or WebP.');
     return;
   }
 
-  const taggedUserIds = message.mentions.users
-    .filter((u) => u.id !== client.user!.id)
-    .map((u) => u.id);
+  const taggedUserIds = message.mentions.users.filter((u) => u.id !== client.user!.id).map((u) => u.id);
 
   if (taggedUserIds.length === 0) {
-    await message.reply(
-      "Please tag at least one other user to split the receipt with.",
-    );
+    await message.reply('Please tag at least one other user to split the receipt with.');
     return;
   }
 
   // Check daily API spend limit before calling Claude
   manager.checkDailyLimit();
 
-  const restaurantName = extractRestaurantName(
-    message.content,
-    client.user!.id,
-  );
+  const restaurantName = extractRestaurantName(message.content, client.user!.id);
 
-  await message.react("⏳");
+  await message.react('⏳');
 
   const response = await fetch(attachment.url);
   const buffer = Buffer.from(await response.arrayBuffer());
-  const imageBase64 = buffer.toString("base64");
+  const imageBase64 = buffer.toString('base64');
 
   const first = await parseReceiptImage(imageBase64, mediaType);
   manager.logApiCost(first.estimatedCostUsd);
@@ -503,9 +434,7 @@ async function handleNewReceipt(
 
   const tipFromReceipt = parsed.tip;
   const defaultTipApplied = tipFromReceipt === null || tipFromReceipt === 0;
-  const effectiveTip = defaultTipApplied
-    ? Math.round(parsed.subtotal * 0.20 * 100) / 100
-    : tipFromReceipt;
+  const effectiveTip = defaultTipApplied ? Math.round(parsed.subtotal * 0.2 * 100) / 100 : tipFromReceipt;
 
   const session: ReceiptSession = {
     id: randomUUID(),
@@ -520,7 +449,7 @@ async function handleNewReceipt(
     taxAmount: parsed.tax,
     tipAmount: effectiveTip,
     total: parsed.total,
-    status: "active",
+    status: 'active',
     summaryMessageId: null,
     taggedUserIds: [message.author.id, ...taggedUserIds],
     createdAt: new Date().toISOString(),
@@ -535,14 +464,7 @@ async function handleNewReceipt(
   const userTotals = manager.getUserTotals(session);
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
-  const embeds = buildSummaryEmbeds(
-    session,
-    lineItems,
-    userTotals,
-    payments,
-    splits,
-    displayName,
-  );
+  const embeds = buildSummaryEmbeds(session, lineItems, userTotals, payments, splits, displayName);
   const summaryMsg = await thread.send({ embeds });
   manager.setSummaryMessageId(session.id, summaryMsg.id);
 
@@ -563,7 +485,7 @@ async function handleNewReceipt(
   }
 
   await message.reactions.removeAll().catch(() => {});
-  await message.react("✅");
+  await message.react('✅');
 }
 
 async function handleThreadMessage(message: Message, client: Client): Promise<void> {
@@ -571,19 +493,19 @@ async function handleThreadMessage(message: Message, client: Client): Promise<vo
   const session = manager.getSession(thread.id);
   if (!session) return;
 
-  if (session.status === "settled") {
-    await message.reply("This receipt has already been settled.");
+  if (session.status === 'settled') {
+    await message.reply('This receipt has already been settled.');
     return;
   }
 
-  if (session.status === "voided") {
-    await message.reply("This receipt has been voided — no further commands are accepted.");
+  if (session.status === 'voided') {
+    await message.reply('This receipt has been voided — no further commands are accepted.');
     return;
   }
 
   // Strip mentions from content so proxy commands parse cleanly
   let contentClean = message.content
-    .replace(/<@!?\d+>/g, "")
+    .replace(/<@!?\d+>/g, '')
     .trim()
     .toLowerCase();
 
@@ -595,115 +517,120 @@ async function handleThreadMessage(message: Message, client: Client): Promise<vo
   const proxyTarget = proxyByName?.proxyId ?? getProxyTarget(message, session);
   const effectiveUserId = proxyTarget ?? message.author.id;
 
-  if (contentClean === "sum paid" || contentClean === "sp") {
+  if (contentClean === 'sum paid' || contentClean === 'sp') {
     await handleSum(message, client, true);
     return;
   }
 
-  if (contentClean === "sum" || contentClean === "sm") {
+  if (contentClean === 'sum' || contentClean === 'sm') {
     await handleSum(message, client, false);
     return;
   }
 
-  if (contentClean.startsWith("rename ") || contentClean.startsWith("rn ")) {
+  if (contentClean.startsWith('rename ') || contentClean.startsWith('rn ')) {
     await handleRename(message, session, contentClean);
     return;
   }
 
-  if (contentClean.startsWith("tip ") || contentClean.startsWith("t ")) {
+  if (contentClean.startsWith('tip ') || contentClean.startsWith('t ')) {
     await handleTipCommand(message, session, contentClean);
     return;
   }
 
   if (
-    contentClean === "discount" ||
-    contentClean.startsWith("discount ") ||
-    contentClean.startsWith("disc ") ||
-    contentClean === "disc"
+    contentClean === 'discount' ||
+    contentClean.startsWith('discount ') ||
+    contentClean.startsWith('disc ') ||
+    contentClean === 'disc'
   ) {
     await handleDiscountCommand(message, session, contentClean);
     return;
   }
 
-  if (contentClean.startsWith("unclaim ") || contentClean.startsWith("uc ")) {
+  if (contentClean.startsWith('unclaim ') || contentClean.startsWith('uc ')) {
     await handleUnclaim(message, session, contentClean, effectiveUserId);
     return;
   }
 
-  if (contentClean.startsWith("split ") || contentClean.startsWith("s ")) {
+  if (contentClean.startsWith('split ') || contentClean.startsWith('s ')) {
     // For split, mentions are participants — not proxy targets, and the
     // actor is never auto-included.
     await handleSplit(message, session);
     return;
   }
 
-  if (contentClean === "void") {
+  if (contentClean === 'void') {
     await handleVoid(message, session);
     return;
   }
 
-  if (contentClean === "help" || contentClean === "h") {
+  if (contentClean === 'help' || contentClean === 'h') {
     await message.reply(formatThreadHelp());
     return;
   }
 
-  if (contentClean === "rescan" || contentClean.startsWith("rescan ")) {
-    const hint = contentClean === "rescan" ? "" : contentClean.slice("rescan ".length).trim();
+  if (contentClean === 'rescan' || contentClean.startsWith('rescan ')) {
+    const hint = contentClean === 'rescan' ? '' : contentClean.slice('rescan '.length).trim();
     await handleRescan(message, session, client, hint);
     return;
   }
 
-  if (contentClean.startsWith("addproxy ") || contentClean.startsWith("ap ")) {
+  if (contentClean.startsWith('addproxy ') || contentClean.startsWith('ap ')) {
     await handleAddProxy(message, session);
     return;
   }
 
-  if (contentClean === "paid" || contentClean === "done" || contentClean === "p") {
+  if (contentClean === 'paid' || contentClean === 'done' || contentClean === 'p') {
     const targets = proxyByName
       ? [proxyByName.proxyId]
-      : getProxyTargets(message, session) ?? [message.author.id];
+      : (getProxyTargets(message, session) ?? [message.author.id]);
     for (const t of targets) await handlePaid(message, session, t);
     return;
   }
 
-  if (contentClean === "unpaid" || contentClean === "up") {
+  if (contentClean === 'unpaid' || contentClean === 'up') {
     const targets = proxyByName
       ? [proxyByName.proxyId]
-      : getProxyTargets(message, session) ?? [message.author.id];
+      : (getProxyTargets(message, session) ?? [message.author.id]);
     for (const t of targets) await handleUnpaid(message, session, t);
     return;
   }
 
-  if (contentClean === "status" || contentClean === "st") {
+  if (contentClean === 'status' || contentClean === 'st') {
     await handleStatus(message, session);
     return;
   }
 
-  if (contentClean.startsWith("adduser ") || contentClean.startsWith("au ")) {
+  if (contentClean.startsWith('adduser ') || contentClean.startsWith('au ')) {
     await handleAddUser(message, session);
     return;
   }
 
-  if (contentClean.startsWith("edit ") || contentClean.startsWith("e ")) {
+  if (contentClean.startsWith('edit ') || contentClean.startsWith('e ')) {
     await handleEditPrice(message, session, contentClean);
     return;
   }
 
-  if (contentClean.startsWith("add ") || contentClean.startsWith("a ")) {
+  if (contentClean.startsWith('add ') || contentClean.startsWith('a ')) {
     await handleAddItem(message, session, contentClean);
     return;
   }
 
-  if (contentClean.startsWith("remove ") || contentClean.startsWith("rm ")) {
+  if (contentClean.startsWith('remove ') || contentClean.startsWith('rm ')) {
     await handleRemoveItem(message, session, contentClean);
     return;
   }
 
-  if (contentClean.startsWith("claim ") || contentClean === "claim" || contentClean.startsWith("c ") || contentClean === "c") {
-    const prefix = contentClean.startsWith("claim") ? "claim" : "c";
+  if (
+    contentClean.startsWith('claim ') ||
+    contentClean === 'claim' ||
+    contentClean.startsWith('c ') ||
+    contentClean === 'c'
+  ) {
+    const prefix = contentClean.startsWith('claim') ? 'claim' : 'c';
     const numbers = parseItemNumbers(contentClean.slice(prefix.length));
     if (numbers.length === 0) {
-      await message.reply("Please specify item numbers (e.g. `claim 1 3 5`).");
+      await message.reply('Please specify item numbers (e.g. `claim 1 3 5`).');
       return;
     }
     await handleClaim(message, session, numbers, effectiveUserId);
@@ -720,15 +647,11 @@ async function handleClaim(
   try {
     manager.claimItems(session.id, itemNumbers, targetUserId);
   } catch (err) {
-    await message.reply(
-      err instanceof Error ? err.message : "Failed to claim items.",
-    );
+    await message.reply(err instanceof Error ? err.message : 'Failed to claim items.');
     return;
   }
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   const displayName = await getDisplayNameResolver(message, refreshedSession);
   const userTotals = manager.getUserTotals(refreshedSession);
   const ut = userTotals.find((u) => u.userId === targetUserId);
@@ -752,50 +675,40 @@ async function handleUnclaim(
   contentClean: string,
   targetUserId: string,
 ): Promise<void> {
-  const ucPrefix = contentClean.startsWith("unclaim ") ? "unclaim " : "uc ";
+  const ucPrefix = contentClean.startsWith('unclaim ') ? 'unclaim ' : 'uc ';
   const numbers = parseItemNumbers(contentClean.slice(ucPrefix.length));
   if (numbers.length === 0) {
-    await message.reply(
-      "Please specify item numbers to unclaim (e.g. `unclaim 1 3`).",
-    );
+    await message.reply('Please specify item numbers to unclaim (e.g. `unclaim 1 3`).');
     return;
   }
 
   try {
     manager.unclaimItems(session.id, numbers, targetUserId);
   } catch (err) {
-    await message.reply(
-      err instanceof Error ? err.message : "Failed to unclaim items.",
-    );
+    await message.reply(err instanceof Error ? err.message : 'Failed to unclaim items.');
     return;
   }
 
-  await message.reply(`Unclaimed items: ${numbers.join(", ")}`);
+  await message.reply(`Unclaimed items: ${numbers.join(', ')}`);
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
-async function handleRename(
-  message: Message,
-  session: ReceiptSession,
-  contentClean: string,
-): Promise<void> {
+async function handleRename(message: Message, session: ReceiptSession, contentClean: string): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can rename the receipt.");
+    await message.reply('Only the primary user can rename the receipt.');
     return;
   }
 
-  const prefix = contentClean.startsWith("rename ") ? "rename " : "rn ";
+  const prefix = contentClean.startsWith('rename ') ? 'rename ' : 'rn ';
   const rawName = contentClean.slice(prefix.length).trim();
   if (!rawName) {
-    await message.reply("Usage: `rename <restaurant name>` (e.g. `rename TK`)");
+    await message.reply('Usage: `rename <restaurant name>` (e.g. `rename TK`)');
     return;
   }
 
-  const newName = extractRestaurantName(rawName, "");
+  const newName = extractRestaurantName(rawName, '');
   manager.setRestaurantName(session.id, newName);
 
   // Also rename the thread to match
@@ -817,55 +730,45 @@ async function handleEditPrice(
   contentClean: string,
 ): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can edit item prices.");
+    await message.reply('Only the primary user can edit item prices.');
     return;
   }
 
-  const prefix = contentClean.startsWith("edit ") ? "edit " : "e ";
+  const prefix = contentClean.startsWith('edit ') ? 'edit ' : 'e ';
   const parts = contentClean.slice(prefix.length).trim().split(/\s+/);
   const itemIndex = parseInt(parts[0], 10);
-  const newPrice = parseFloat(parts[1]?.replace("$", "") ?? "");
+  const newPrice = parseFloat(parts[1]?.replace('$', '') ?? '');
 
   if (isNaN(itemIndex) || isNaN(newPrice) || newPrice < 0) {
-    await message.reply("Usage: `edit <item#> <price>` (e.g. `edit 5 12.50`)");
+    await message.reply('Usage: `edit <item#> <price>` (e.g. `edit 5 12.50`)');
     return;
   }
 
   try {
     manager.editItemPrice(session.id, itemIndex, newPrice);
   } catch (err) {
-    await message.reply(
-      err instanceof Error ? err.message : "Failed to edit item.",
-    );
+    await message.reply(err instanceof Error ? err.message : 'Failed to edit item.');
     return;
   }
 
   await message.reply(`Item ${itemIndex} price updated to $${newPrice.toFixed(2)}.`);
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
-async function handleAddItem(
-  message: Message,
-  session: ReceiptSession,
-  contentClean: string,
-): Promise<void> {
+async function handleAddItem(message: Message, session: ReceiptSession, contentClean: string): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can add items.");
+    await message.reply('Only the primary user can add items.');
     return;
   }
 
   // Format: add <name> <price> [qty]
   // Parse from the end: last token is qty (if numeric), second-to-last is price, rest is name
-  const prefix = contentClean.startsWith("add ") ? "add " : "a ";
+  const prefix = contentClean.startsWith('add ') ? 'add ' : 'a ';
   const tokens = contentClean.slice(prefix.length).trim().split(/\s+/);
 
   if (tokens.length < 2) {
-    await message.reply(
-      "Usage: `add <name> <price> [qty]` (e.g. `add Diet Coke 1.75 2`)",
-    );
+    await message.reply('Usage: `add <name> <price> [qty]` (e.g. `add Diet Coke 1.75 2`)');
     return;
   }
 
@@ -875,36 +778,32 @@ async function handleAddItem(
   // Check if last token is a quantity (integer) and second-to-last is a price
   if (tokens.length >= 3) {
     const maybeQty = parseInt(tokens[tokens.length - 1], 10);
-    const maybePrice = parseFloat(tokens[tokens.length - 2]?.replace("$", "") ?? "");
+    const maybePrice = parseFloat(tokens[tokens.length - 2]?.replace('$', '') ?? '');
     if (!isNaN(maybeQty) && maybeQty > 0 && !isNaN(maybePrice) && maybePrice >= 0) {
       quantity = maybeQty;
       priceIndex = tokens.length - 2;
     }
   }
 
-  const price = parseFloat(tokens[priceIndex]?.replace("$", "") ?? "");
+  const price = parseFloat(tokens[priceIndex]?.replace('$', '') ?? '');
   if (isNaN(price) || price < 0) {
-    await message.reply(
-      "Usage: `add <name> <price> [qty]` (e.g. `add Diet Coke 1.75 2`)",
-    );
+    await message.reply('Usage: `add <name> <price> [qty]` (e.g. `add Diet Coke 1.75 2`)');
     return;
   }
 
-  const name = tokens.slice(0, priceIndex).join(" ");
+  const name = tokens.slice(0, priceIndex).join(' ');
   if (!name) {
-    await message.reply("Please provide an item name.");
+    await message.reply('Please provide an item name.');
     return;
   }
 
   const indices = manager.addItem(session.id, name, price, quantity);
   const label = quantity > 1 ? `${quantity}x ${name}` : name;
   await message.reply(
-    `Added **${label}** at $${price.toFixed(2)} each (item${indices.length > 1 ? "s" : ""} ${indices.join(", ")}).`,
+    `Added **${label}** at $${price.toFixed(2)} each (item${indices.length > 1 ? 's' : ''} ${indices.join(', ')}).`,
   );
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
@@ -914,14 +813,14 @@ async function handleRemoveItem(
   contentClean: string,
 ): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can remove items.");
+    await message.reply('Only the primary user can remove items.');
     return;
   }
 
-  const prefix = contentClean.startsWith("remove ") ? "remove " : "rm ";
+  const prefix = contentClean.startsWith('remove ') ? 'remove ' : 'rm ';
   const numbers = parseItemNumbers(contentClean.slice(prefix.length));
   if (numbers.length === 0) {
-    await message.reply("Usage: `remove <item#>` (e.g. `remove 5` or `rm 3 5 7`)");
+    await message.reply('Usage: `remove <item#>` (e.g. `remove 5` or `rm 3 5 7`)');
     return;
   }
 
@@ -935,32 +834,23 @@ async function handleRemoveItem(
   }
 
   if (errors.length > 0) {
-    await message.reply(errors.join("\n"));
+    await message.reply(errors.join('\n'));
     if (errors.length === numbers.length) return;
   }
 
-  const removed = numbers.filter(
-    (n) => !errors.some((e) => e.includes(`${n}`)),
-  );
+  const removed = numbers.filter((n) => !errors.some((e) => e.includes(`${n}`)));
   if (removed.length > 0) {
-    await message.reply(`Removed item${removed.length > 1 ? "s" : ""}: ${removed.join(", ")}`);
+    await message.reply(`Removed item${removed.length > 1 ? 's' : ''}: ${removed.join(', ')}`);
   }
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
-async function handleSplit(
-  message: Message,
-  session: ReceiptSession,
-): Promise<void> {
+async function handleSplit(message: Message, session: ReceiptSession): Promise<void> {
   // Tokenize the original content (with mentions intact) so we can pair
   // each `<@id>` with an optional following `NN%` percentage token.
-  const raw = message.content
-    .replace(/^.*?\b(split|s)\b\s*/i, "")
-    .trim();
+  const raw = message.content.replace(/^.*?\b(split|s)\b\s*/i, '').trim();
   const tokens = raw.split(/\s+/).filter((t) => t.length > 0);
 
   // Item numbers come before the first mention; user/pct pairs come after.
@@ -976,9 +866,7 @@ async function handleSplit(
   itemIndices.sort((a, b) => a - b);
 
   if (itemIndices.length === 0) {
-    await message.reply(
-      "Usage: `split <item#> [<item#>...] @user1 [pct%] @user2 [pct%]`",
-    );
+    await message.reply('Usage: `split <item#> [<item#>...] @user1 [pct%] @user2 [pct%]`');
     return;
   }
 
@@ -1001,7 +889,7 @@ async function handleSplit(
   }
 
   if (explicit.length === 0) {
-    await message.reply("Please mention at least one user to split with.");
+    await message.reply('Please mention at least one user to split with.');
     return;
   }
 
@@ -1019,24 +907,20 @@ async function handleSplit(
   if (anyPct) {
     const missingPct = participants.filter((p) => p.pct === null);
     if (missingPct.length > 0) {
-      const names = missingPct.map((p) => `<@${p.userId}>`).join(", ");
-      await message.reply(
-        `If you specify percentages, every user needs one. Missing for: ${names}.`,
-      );
+      const names = missingPct.map((p) => `<@${p.userId}>`).join(', ');
+      await message.reply(`If you specify percentages, every user needs one. Missing for: ${names}.`);
       return;
     }
     const sum = participants.reduce((s, p) => s + p.pct!, 0);
     if (Math.abs(sum - 100) > 0.01) {
-      await message.reply(
-        `Percentages sum to ${sum.toFixed(2)}% but should sum to 100%.`,
-      );
+      await message.reply(`Percentages sum to ${sum.toFixed(2)}% but should sum to 100%.`);
       return;
     }
   }
 
   if (participants.length < 2) {
     await message.reply(
-      "Please mention at least two users to split the item(s) between (the actor is no longer auto-included).",
+      'Please mention at least two users to split the item(s) between (the actor is no longer auto-included).',
     );
     return;
   }
@@ -1051,20 +935,14 @@ async function handleSplit(
       manager.splitItem(session.id, itemIndex, userIds, sharePcts);
       succeeded.push(itemIndex);
     } catch (err) {
-      failures.push(
-        `Item ${itemIndex}: ${err instanceof Error ? err.message : "failed"}`,
-      );
+      failures.push(`Item ${itemIndex}: ${err instanceof Error ? err.message : 'failed'}`);
     }
   }
 
   const displayName = await getDisplayNameResolver(message, session);
   const names = participants
-    .map((p) =>
-      anyPct
-        ? `${displayName(p.userId)} (${p.pct!.toFixed(0)}%)`
-        : displayName(p.userId),
-    )
-    .join(", ");
+    .map((p) => (anyPct ? `${displayName(p.userId)} (${p.pct!.toFixed(0)}%)` : displayName(p.userId)))
+    .join(', ');
 
   if (succeeded.length > 0) {
     const items = manager.getItems(session.id);
@@ -1077,7 +955,7 @@ async function handleSplit(
             const amt = (item.unitPrice * (p.pct! / 100)).toFixed(2);
             return `${displayName(p.userId)} $${amt}`;
           })
-          .join(", ");
+          .join(', ');
         return `Item ${idx}: ${perUser}`;
       }
       const perPerson = (item.unitPrice / participants.length).toFixed(2);
@@ -1086,39 +964,34 @@ async function handleSplit(
     const header =
       succeeded.length === 1
         ? `Item ${succeeded[0]} split between ${names}:`
-        : `Items ${succeeded.join(", ")} split between ${names}:`;
-    await message.reply(`${header}\n${lines.join("\n")}`);
+        : `Items ${succeeded.join(', ')} split between ${names}:`;
+    await message.reply(`${header}\n${lines.join('\n')}`);
   }
 
   if (failures.length > 0) {
-    await message.reply(failures.join("\n"));
+    await message.reply(failures.join('\n'));
   }
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
-async function handleAddProxy(
-  message: Message,
-  session: ReceiptSession,
-): Promise<void> {
+async function handleAddProxy(message: Message, session: ReceiptSession): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can add a proxy.");
+    await message.reply('Only the primary user can add a proxy.');
     return;
   }
 
-  const raw = message.content.replace(/<@!?\d+>/g, "").trim();
+  const raw = message.content.replace(/<@!?\d+>/g, '').trim();
   const prefix = raw.match(/^(addproxy|ap)\s+/i);
   if (!prefix) {
-    await message.reply("Usage: `addproxy <name>` — creates a placeholder user.");
+    await message.reply('Usage: `addproxy <name>` — creates a placeholder user.');
     return;
   }
   const name = raw.slice(prefix[0].length).trim();
 
   if (!name) {
-    await message.reply("Please provide a name for the proxy, e.g. `addproxy Alice`.");
+    await message.reply('Please provide a name for the proxy, e.g. `addproxy Alice`.');
     return;
   }
   if (/\s/.test(name)) {
@@ -1141,9 +1014,7 @@ async function handleAddProxy(
     `Added proxy **${name}**. Use \`claim 1 3 as ${name}\`, \`paid as ${name}\`, etc. to act on their behalf.`,
   );
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
@@ -1154,7 +1025,7 @@ async function handleRescan(
   hint: string,
 ): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can re-scan the receipt.");
+    await message.reply('Only the primary user can re-scan the receipt.');
     return;
   }
 
@@ -1171,31 +1042,25 @@ async function handleRescan(
     await message.reply("Couldn't find the original receipt message (it may have been deleted).");
     return;
   }
-  const attachment = origMessage.attachments.find((a) =>
-    a.contentType?.startsWith("image/"),
-  );
+  const attachment = origMessage.attachments.find((a) => a.contentType?.startsWith('image/'));
   if (!attachment) {
-    await message.reply("The original message no longer has a receipt image.");
+    await message.reply('The original message no longer has a receipt image.');
     return;
   }
   const mediaType = getImageMediaType(attachment.contentType);
   if (!mediaType) {
-    await message.reply("Unsupported image format on the original message.");
+    await message.reply('Unsupported image format on the original message.');
     return;
   }
 
   manager.checkDailyLimit();
-  await message.react("⏳");
+  await message.react('⏳');
 
   const response = await fetch(attachment.url);
   const buffer = Buffer.from(await response.arrayBuffer());
-  const imageBase64 = buffer.toString("base64");
+  const imageBase64 = buffer.toString('base64');
 
-  const { parsed, estimatedCostUsd } = await parseReceiptImage(
-    imageBase64,
-    mediaType,
-    hint || undefined,
-  );
+  const { parsed, estimatedCostUsd } = await parseReceiptImage(imageBase64, mediaType, hint || undefined);
   manager.logApiCost(estimatedCostUsd);
 
   const allItems = expandLineItems(parsed);
@@ -1213,33 +1078,26 @@ async function handleRescan(
 
   await message.reactions.removeAll().catch(() => {});
   await message.reply(
-    `🔄 Receipt re-scanned${hint ? ` with hint: _${hint}_` : ""}. All previous claims, splits, and payment statuses were reset. Please double-check the values below.`,
+    `🔄 Receipt re-scanned${hint ? ` with hint: _${hint}_` : ''}. All previous claims, splits, and payment statuses were reset. Please double-check the values below.`,
   );
 
   if (warning) {
     await (message.channel as ThreadChannel).send(`⚠️ ${warning}`);
   }
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
-async function handleVoid(
-  message: Message,
-  session: ReceiptSession,
-): Promise<void> {
+async function handleVoid(message: Message, session: ReceiptSession): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can void this receipt.");
+    await message.reply('Only the primary user can void this receipt.');
     return;
   }
 
   manager.voidSession(session.id);
 
-  await message.reply(
-    "🚫 Receipt voided. No further commands will be accepted on this thread.",
-  );
+  await message.reply('🚫 Receipt voided. No further commands will be accepted on this thread.');
 
   const thread = message.channel as ThreadChannel;
   try {
@@ -1250,23 +1108,17 @@ async function handleVoid(
   }
 }
 
-async function handleUnpaid(
-  message: Message,
-  session: ReceiptSession,
-  targetUserId: string,
-): Promise<void> {
+async function handleUnpaid(message: Message, session: ReceiptSession, targetUserId: string): Promise<void> {
   const payments = manager.getPaymentStatuses(session.id);
   const userPayment = payments.find((p) => p.userId === targetUserId);
 
   if (!userPayment) {
-    await message.reply(
-      "That user doesn't have any claimed items on this receipt.",
-    );
+    await message.reply("That user doesn't have any claimed items on this receipt.");
     return;
   }
 
   if (!userPayment.paid) {
-    await message.reply("That user is already marked as unpaid.");
+    await message.reply('That user is already marked as unpaid.');
     return;
   }
 
@@ -1275,18 +1127,13 @@ async function handleUnpaid(
   const displayName = await getDisplayNameResolver(message, session);
   await message.reply(`${displayName(targetUserId)} marked as unpaid.`);
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
-async function handleAddUser(
-  message: Message,
-  session: ReceiptSession,
-): Promise<void> {
+async function handleAddUser(message: Message, session: ReceiptSession): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can add new users.");
+    await message.reply('Only the primary user can add new users.');
     return;
   }
 
@@ -1295,9 +1142,7 @@ async function handleAddUser(
     .map((u) => u.id);
 
   if (newUsers.length === 0) {
-    await message.reply(
-      "No new users to add. Make sure you @mention users not already in this receipt.",
-    );
+    await message.reply('No new users to add. Make sure you @mention users not already in this receipt.');
     return;
   }
 
@@ -1305,35 +1150,21 @@ async function handleAddUser(
     manager.addUserToSession(session.id, userId);
   }
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   const displayName = await getDisplayNameResolver(message, refreshedSession);
-  const names = newUsers.map((id) => displayName(id)).join(", ");
-  await message.reply(
-    `Added ${names} to the receipt. They can now claim items.`,
-  );
+  const names = newUsers.map((id) => displayName(id)).join(', ');
+  await message.reply(`Added ${names} to the receipt. They can now claim items.`);
 
   await updateSummaryMessage(message, refreshedSession);
 }
 
-async function handleStatus(
-  message: Message,
-  session: ReceiptSession,
-): Promise<void> {
+async function handleStatus(message: Message, session: ReceiptSession): Promise<void> {
   const displayName = await getDisplayNameResolver(message, session);
   const items = manager.getItems(session.id);
   const userTotals = manager.getUserTotals(session);
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
-  const embeds = buildSummaryEmbeds(
-    session,
-    items,
-    userTotals,
-    payments,
-    splits,
-    displayName,
-  );
+  const embeds = buildSummaryEmbeds(session, items, userTotals, payments, splits, displayName);
   await message.reply({ embeds });
 }
 
@@ -1343,44 +1174,42 @@ async function handleDiscountCommand(
   contentClean: string,
 ): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can change the discount.");
+    await message.reply('Only the primary user can change the discount.');
     return;
   }
 
-  let arg = "";
-  if (contentClean.startsWith("discount ")) arg = contentClean.slice("discount ".length).trim();
-  else if (contentClean.startsWith("disc ")) arg = contentClean.slice("disc ".length).trim();
+  let arg = '';
+  if (contentClean.startsWith('discount ')) arg = contentClean.slice('discount '.length).trim();
+  else if (contentClean.startsWith('disc ')) arg = contentClean.slice('disc '.length).trim();
 
-  if (!arg || arg === "remove" || arg === "rm" || arg === "0") {
+  if (!arg || arg === 'remove' || arg === 'rm' || arg === '0') {
     manager.setDiscount(session.id, 0);
-    await message.reply("Discount removed.");
+    await message.reply('Discount removed.');
     const refreshed = manager.getSession((message.channel as ThreadChannel).id)!;
     await updateSummaryMessage(message, refreshed);
     return;
   }
 
   let amount: number;
-  if (arg.endsWith("%")) {
+  if (arg.endsWith('%')) {
     const pct = parseFloat(arg.slice(0, -1));
     if (isNaN(pct) || pct < 0) {
-      await message.reply("Invalid discount percentage. Use e.g. `discount 15%`.");
+      await message.reply('Invalid discount percentage. Use e.g. `discount 15%`.');
       return;
     }
     amount = Math.round(session.subtotal * (pct / 100) * 100) / 100;
   } else {
-    amount = parseFloat(arg.replace("$", ""));
+    amount = parseFloat(arg.replace('$', ''));
     if (isNaN(amount) || amount < 0) {
       await message.reply(
-        "Invalid discount. Use e.g. `discount 5.00`, `discount 15%`, or `discount remove`.",
+        'Invalid discount. Use e.g. `discount 5.00`, `discount 15%`, or `discount remove`.',
       );
       return;
     }
   }
 
   if (amount > session.subtotal) {
-    await message.reply(
-      `Discount $${amount.toFixed(2)} exceeds subtotal $${session.subtotal.toFixed(2)}.`,
-    );
+    await message.reply(`Discount $${amount.toFixed(2)} exceeds subtotal $${session.subtotal.toFixed(2)}.`);
     return;
   }
 
@@ -1397,27 +1226,25 @@ async function handleTipCommand(
   contentClean: string,
 ): Promise<void> {
   if (message.author.id !== session.primaryUserId) {
-    await message.reply("Only the primary user can set the tip.");
+    await message.reply('Only the primary user can set the tip.');
     return;
   }
 
-  const prefix = contentClean.startsWith("tip ") ? "tip " : "t ";
+  const prefix = contentClean.startsWith('tip ') ? 'tip ' : 't ';
   const tipStr = contentClean.slice(prefix.length).trim();
   let tipAmount: number;
 
-  if (tipStr.endsWith("%")) {
+  if (tipStr.endsWith('%')) {
     const pct = parseFloat(tipStr.slice(0, -1));
     if (isNaN(pct)) {
-      await message.reply("Invalid tip percentage. Use e.g. `tip 20%`.");
+      await message.reply('Invalid tip percentage. Use e.g. `tip 20%`.');
       return;
     }
     tipAmount = Math.round(session.subtotal * (pct / 100) * 100) / 100;
   } else {
     tipAmount = parseFloat(tipStr);
     if (isNaN(tipAmount)) {
-      await message.reply(
-        "Invalid tip amount. Use e.g. `tip 15.00` or `tip 20%`.",
-      );
+      await message.reply('Invalid tip amount. Use e.g. `tip 15.00` or `tip 20%`.');
       return;
     }
   }
@@ -1425,29 +1252,21 @@ async function handleTipCommand(
   manager.setTip(session.id, tipAmount);
   await message.reply(`Tip set to $${tipAmount.toFixed(2)}.`);
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
 }
 
-async function handlePaid(
-  message: Message,
-  session: ReceiptSession,
-  targetUserId: string,
-): Promise<void> {
+async function handlePaid(message: Message, session: ReceiptSession, targetUserId: string): Promise<void> {
   const payments = manager.getPaymentStatuses(session.id);
   const userPayment = payments.find((p) => p.userId === targetUserId);
 
   if (!userPayment) {
-    await message.reply(
-      "That user doesn't have any claimed items on this receipt.",
-    );
+    await message.reply("That user doesn't have any claimed items on this receipt.");
     return;
   }
 
   if (userPayment.paid) {
-    await message.reply("That user is already marked as paid.");
+    await message.reply('That user is already marked as paid.');
     return;
   }
 
@@ -1456,17 +1275,12 @@ async function handlePaid(
   const displayName = await getDisplayNameResolver(message, session);
   await message.reply(`${displayName(targetUserId)} marked as paid! ✅`);
 
-  const refreshedSession = manager.getSession(
-    (message.channel as ThreadChannel).id,
-  )!;
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
   await updateSummaryMessage(message, refreshedSession);
   await checkAndNotify(message, refreshedSession);
 
   // Remove user from thread if they marked themselves paid (not proxy) and aren't the primary user
-  if (
-    targetUserId === message.author.id &&
-    targetUserId !== session.primaryUserId
-  ) {
+  if (targetUserId === message.author.id && targetUserId !== session.primaryUserId) {
     const thread = message.channel as ThreadChannel;
     try {
       await thread.members.remove(targetUserId);
@@ -1476,10 +1290,7 @@ async function handlePaid(
   }
 }
 
-async function updateSummaryMessage(
-  message: Message,
-  session: ReceiptSession,
-): Promise<void> {
+async function updateSummaryMessage(message: Message, session: ReceiptSession): Promise<void> {
   if (!session.summaryMessageId) return;
 
   const thread = message.channel as ThreadChannel;
@@ -1488,14 +1299,7 @@ async function updateSummaryMessage(
   const userTotals = manager.getUserTotals(session);
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
-  const embeds = buildSummaryEmbeds(
-    session,
-    items,
-    userTotals,
-    payments,
-    splits,
-    displayName,
-  );
+  const embeds = buildSummaryEmbeds(session, items, userTotals, payments, splits, displayName);
 
   try {
     const summaryMsg = await thread.messages.fetch(session.summaryMessageId);
@@ -1506,10 +1310,7 @@ async function updateSummaryMessage(
   }
 }
 
-async function checkAndNotify(
-  message: Message,
-  session: ReceiptSession,
-): Promise<void> {
+async function checkAndNotify(message: Message, session: ReceiptSession): Promise<void> {
   const { allClaimed, allPaid } = manager.checkAllClaimedAndPaid(session);
   const thread = message.channel as ThreadChannel;
 
@@ -1518,11 +1319,7 @@ async function checkAndNotify(
     const primaryName = displayName(session.primaryUserId);
 
     const userTotals = manager.getUserTotals(session);
-    manager.recordSettlement(
-      session.guildId,
-      session.restaurantName,
-      userTotals,
-    );
+    manager.recordSettlement(session.guildId, session.restaurantName, userTotals);
 
     await thread.send(
       `🎉 **${primaryName}** — All payments for **${session.restaurantName}** have been received!`,
@@ -1537,15 +1334,13 @@ async function checkAndNotify(
     const items = manager.getItems(session.id);
     const unclaimed = items.filter((i) => !i.claimedByUserId);
     if (unclaimed.length > 0) {
-      const claimants = new Set(
-        items.filter((i) => i.claimedByUserId).map((i) => i.claimedByUserId!),
-      );
+      const claimants = new Set(items.filter((i) => i.claimedByUserId).map((i) => i.claimedByUserId!));
       const allTaggedHaveClaimed = session.taggedUserIds
         .filter((id) => id !== session.primaryUserId)
         .every((id) => claimants.has(id));
 
       if (allTaggedHaveClaimed && !claimants.has(session.primaryUserId)) {
-        const unclaimedNums = unclaimed.map((i) => i.index).join(", ");
+        const unclaimedNums = unclaimed.map((i) => i.index).join(', ');
         await thread.send(
           `Items ${unclaimedNums} are still unclaimed. <@${session.primaryUserId}>, who do these belong to?`,
         );
