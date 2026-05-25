@@ -39,7 +39,6 @@ export function extractRestaurantName(content: string, botId: string): string {
 }
 
 import { Attachment, Guild } from 'discord.js';
-import { fileTypeFromBuffer } from 'file-type';
 
 export type DisplayNameResolver = (userId: string) => string;
 
@@ -81,11 +80,11 @@ export async function buildDisplayNameResolver(
 }
 
 export async function getImageMediaType(
-  attachment: Attachment,
+  attachment: Attachment | null,
 ): Promise<'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null> {
   if (!attachment) return null;
 
-  if (!attachment) return null;
+  const { fileTypeFromBuffer } = await import('file-type');
 
   const response = await fetch(attachment.url);
 

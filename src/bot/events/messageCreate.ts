@@ -1047,7 +1047,7 @@ async function handleRescan(
     await message.reply('The original message no longer has a receipt image.');
     return;
   }
-  const mediaType = getImageMediaType(attachment.contentType);
+  const mediaType = await getImageMediaType(attachment);
   if (!mediaType) {
     await message.reply('Unsupported image format on the original message.');
     return;
