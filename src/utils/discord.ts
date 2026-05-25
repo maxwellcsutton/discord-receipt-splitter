@@ -15,34 +15,34 @@ export function parseItemNumbers(text: string): number[] {
 // Keys must be lowercase for case-insensitive matching.
 const RESTAURANT_ALIASES: Record<string, string> = {
   // T Kebob
-  tk: "T Kebob",
-  tkebab: "T Kebob",
-  "t kebab": "T Kebob",
-  "t kebob": "T Kebob",
+  tk: 'T Kebob',
+  tkebab: 'T Kebob',
+  't kebab': 'T Kebob',
+  't kebob': 'T Kebob',
   // SunNongDan
-  snd: "SunNongDan",
+  snd: 'SunNongDan',
   // BCD
-  bcd: "BCD",
+  bcd: 'BCD',
   // Chubby Cattle
-  chubby: "Chubby Cattle",
-  "chubby cattle": "Chubby Cattle",
+  chubby: 'Chubby Cattle',
+  'chubby cattle': 'Chubby Cattle',
 };
 
 export function extractRestaurantName(content: string, botId: string): string {
   // Remove user, role, and channel mentions and trim
-  const name = content.replace(/<[@#][!&]?\d+>/g, "").trim();
+  const name = content.replace(/<[@#][!&]?\d+>/g, '').trim();
 
-  if (!name) return "Receipt";
+  if (!name) return 'Receipt';
 
   const canonical = RESTAURANT_ALIASES[name.toLowerCase()];
   return canonical ?? name;
 }
 
-import { Guild } from "discord.js";
+import { Guild } from 'discord.js';
 
 export type DisplayNameResolver = (userId: string) => string;
 
-export const PROXY_PREFIX = "proxy:";
+export const PROXY_PREFIX = 'proxy:';
 
 export function isProxyUserId(id: string): boolean {
   return id.startsWith(PROXY_PREFIX);
@@ -81,12 +81,23 @@ export async function buildDisplayNameResolver(
 
 export function getImageMediaType(
   contentType: string | null,
-): "image/jpeg" | "image/png" | "image/gif" | "image/webp" | null {
+): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null {
   if (!contentType) return null;
   const type = contentType.toLowerCase();
-  if (type.includes("jpeg") || type.includes("jpg")) return "image/jpeg";
-  if (type.includes("png")) return "image/png";
-  if (type.includes("gif")) return "image/gif";
-  if (type.includes("webp")) return "image/webp";
-  return null;
+  console.log('img content type ', contentType.toLowerCase());
+  switch (true) {
+    default:
+      return null
+  case type.includes('jpeg'):
+  case type.includes('jpg'):
+    return 'image/jpeg';
+
+  case type.includes('png'):
+    return 'image/png';
+
+  case type.includes('gif'):
+    return 'image/gif';
+
+  case type.includes('webp'):
+    return 'image/webp';
 }
