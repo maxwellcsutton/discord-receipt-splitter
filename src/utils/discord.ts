@@ -87,17 +87,18 @@ export function getImageMediaType(
   console.log('img content type ', contentType.toLowerCase());
   switch (true) {
     default:
-      return null
-  case type.includes('jpeg'):
-  case type.includes('jpg'):
-    return 'image/jpeg';
+      return null;
+    case type.includes('jpeg'):
+    case type.includes('jpg'):
+      return 'image/jpeg';
 
-  case type.includes('png'):
-    return 'image/png';
+    case type.includes('png'):
+      return 'image/png';
 
-  case type.includes('gif'):
-    return 'image/gif';
+    case type.includes('gif'):
+      return 'image/gif';
 
-  case type.includes('webp'):
-    return 'image/webp';
+    case type.includes('webp'):
+      return 'image/webp';
+  }
 }
