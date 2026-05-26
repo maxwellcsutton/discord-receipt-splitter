@@ -23,6 +23,7 @@ import {
   DisplayNameResolver,
   isProxyUserId,
   makeProxyUserId,
+  proxyDisplayName,
 } from '../../utils/discord.js';
 import { ReceiptSession, UserTotal } from '../../receipt/types.js';
 
@@ -853,11 +854,28 @@ async function handleSplit(message: Message, session: ReceiptSession): Promise<v
   const raw = message.content.replace(/^.*?\b(split|s)\b\s*/i, '').trim();
   const tokens = raw.split(/\s+/).filter((t) => t.length > 0);
 
-  // Item numbers come before the first mention; user/pct pairs come after.
+  // Map lowercased proxy names → stored proxy ID, so bare name tokens like
+  // "alice" resolve to the `proxy:Alice` user already in the session.
+  const proxyByLowerName = new Map<string, string>();
+  for (const id of session.taggedUserIds) {
+    if (isProxyUserId(id)) {
+      proxyByLowerName.set(proxyDisplayName(id).toLowerCase(), id);
+    }
+  }
+  const resolveParticipant = (token: string): string | null => {
+    const m = token.match(/^<@!?(\d+)>$/);
+    if (m) {
+      if (m[1] === message.client.user!.id) return null;
+      return m[1];
+    }
+    return proxyByLowerName.get(token.toLowerCase()) ?? null;
+  };
+
+  // Item numbers come before the first participant token; user/pct pairs come after.
   const itemIndices: number[] = [];
   let i = 0;
   for (; i < tokens.length; i++) {
-    if (/^<@!?\d+>$/.test(tokens[i])) break;
+    if (resolveParticipant(tokens[i]) !== null) break;
     if (/^\d+$/.test(tokens[i])) {
       const n = parseInt(tokens[i], 10);
       if (!itemIndices.includes(n)) itemIndices.push(n);
@@ -872,10 +890,8 @@ async function handleSplit(message: Message, session: ReceiptSession): Promise<v
 
   const explicit: { userId: string; pct: number | null }[] = [];
   for (; i < tokens.length; i++) {
-    const m = tokens[i].match(/^<@!?(\d+)>$/);
-    if (!m) continue;
-    const userId = m[1];
-    if (userId === message.client.user!.id) continue;
+    const userId = resolveParticipant(tokens[i]);
+    if (userId === null) continue;
     let pct: number | null = null;
     const next = tokens[i + 1];
     if (next) {
