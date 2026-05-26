@@ -1186,7 +1186,7 @@ async function handleStatus(message: Message, session: ReceiptSession): Promise<
   } catch (err: any) {
     if (err?.code == 50035) {
       for (let i = 0; i < embeds.length; i++) {
-        await message.reply(`${embeds[i]}`);
+        await message.reply(embeds?.[i]?.data?.fields?.[0]?.value as string);
       }
     }
   }
