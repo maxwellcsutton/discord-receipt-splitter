@@ -1,4 +1,16 @@
-import { Client, Message, TextChannel, ThreadChannel, ChannelType, EmbedBuilder, APIEmbed } from 'discord.js';
+import {
+  Client,
+  Message,
+  TextChannel,
+  ThreadChannel,
+  ChannelType,
+  EmbedBuilder,
+  APIEmbed,
+  OmitPartialGroupDMChannel,
+  MessagePayload,
+  MessageReplyOptions,
+  MessageCreateOptions,
+} from 'discord.js';
 import { randomUUID } from 'crypto';
 import { config } from '../../config.js';
 import {
@@ -26,6 +38,63 @@ import {
   proxyDisplayName,
 } from '../../utils/discord.js';
 import { ReceiptSession, UserTotal } from '../../receipt/types.js';
+
+export function hasEmbeds(value: unknown): value is { embeds: EmbedBuilder[] } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'embeds' in value &&
+    Array.isArray(value.embeds) &&
+    value.embeds.every((embed) => embed instanceof EmbedBuilder)
+  );
+}
+
+export async function messageReplyHandler(
+  message: Message,
+  input: string | MessagePayload | MessageReplyOptions,
+): Promise<void> {
+  try {
+    await message.reply(input);
+  } catch (err: any) {
+    if (err?.code == 50035 && hasEmbeds(input)) {
+      for (let i = 0; i < input.embeds.length; i++) {
+        await message.reply({ embeds: [input.embeds[i].data] });
+      }
+    } else {
+      console.error('Error handling message:', err);
+      try {
+        await message.reply(
+          `OOPSIE WOOPSIE!! Uwu We make a fucky wucky!! A wittle fucko boingo! The code monkeys at our headquarters are working VEWY HAWD to fix this!`,
+        );
+      } catch {
+        // ignore reply failure
+      }
+    }
+  }
+}
+
+export async function threadSendHandler(
+  thread: ThreadChannel,
+  input: string | MessagePayload | MessageCreateOptions,
+): Promise<Message> {
+  try {
+    return await thread.send(input);
+  } catch (err: any) {
+    if (err?.code == 50035 && hasEmbeds(input)) {
+      let lastMsg;
+      for (let i = 0; i < input.embeds.length; i++) {
+        const msg = await thread.send({ embeds: [input.embeds[i].data] });
+        lastMsg = msg;
+      }
+      return lastMsg as Message<true>;
+    } else {
+      console.error('Error handling message:', err);
+      return await thread.send(
+        `OOPSIE WOOPSIE!! Uwu We make a fucky wucky!! A wittle fucko boingo! The code monkeys at our headquarters are working VEWY HAWD to fix this!`,
+      );
+    }
+  }
+}
 
 export function registerMessageCreateEvent(client: Client): void {
   client.on('messageCreate', async (message: Message) => {
@@ -323,7 +392,7 @@ async function handleSum(message: Message, client: Client, markPaid: boolean): P
             const summaryMsg = await thread.messages.fetch(session.summaryMessageId);
             await summaryMsg.edit({ embeds });
           } catch {
-            const newMsg = await thread.send({ embeds });
+            const newMsg = await threadSendHandler(thread, { embeds });
             manager.setSummaryMessageId(session.id, newMsg.id);
           }
         }
@@ -466,7 +535,7 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
   const embeds = buildSummaryEmbeds(session, lineItems, userTotals, payments, splits, displayName);
-  const summaryMsg = await thread.send({ embeds });
+  const summaryMsg = await threadSendHandler(thread, { embeds });
   manager.setSummaryMessageId(session.id, summaryMsg.id);
 
   if (wasRescanned) {
@@ -1181,15 +1250,7 @@ async function handleStatus(message: Message, session: ReceiptSession): Promise<
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
   const embeds = buildSummaryEmbeds(session, items, userTotals, payments, splits, displayName);
-  try {
-    await message.reply({ embeds });
-  } catch (err: any) {
-    if (err?.code == 50035) {
-      for (let i = 0; i < embeds.length; i++) {
-        await message.reply({ embeds: [embeds[i].data] });
-      }
-    }
-  }
+  await messageReplyHandler(message, { embeds });
 }
 
 async function handleDiscountCommand(
@@ -1329,7 +1390,7 @@ async function updateSummaryMessage(message: Message, session: ReceiptSession): 
     const summaryMsg = await thread.messages.fetch(session.summaryMessageId);
     await summaryMsg.edit({ embeds });
   } catch {
-    const newMsg = await thread.send({ embeds });
+    const newMsg = await threadSendHandler(thread, { embeds });
     manager.setSummaryMessageId(session.id, newMsg.id);
   }
 }
