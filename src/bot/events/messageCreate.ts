@@ -1,4 +1,12 @@
-import { Client, Message, TextChannel, ThreadChannel, ChannelType, EmbedBuilder } from 'discord.js';
+import {
+  Client,
+  Message,
+  TextChannel,
+  ThreadChannel,
+  ChannelType,
+  EmbedBuilder,
+  MessagePayload,
+} from 'discord.js';
 import { randomUUID } from 'crypto';
 import { config } from '../../config.js';
 import {
@@ -1186,7 +1194,7 @@ async function handleStatus(message: Message, session: ReceiptSession): Promise<
   } catch (err: any) {
     if (err?.code == 50035) {
       for (let i = 0; i < embeds.length; i++) {
-        await message.reply(embeds?.[i]?.data?.fields?.[0]?.value as string);
+        await message.reply(embeds?.[i]?.data as MessagePayload);
       }
     }
   }
