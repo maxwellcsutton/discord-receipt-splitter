@@ -1,13 +1,4 @@
-import {
-  Client,
-  Message,
-  TextChannel,
-  ThreadChannel,
-  ChannelType,
-  EmbedBuilder,
-  MessagePayload,
-  MessageReplyOptions,
-} from 'discord.js';
+import { Client, Message, TextChannel, ThreadChannel, ChannelType, EmbedBuilder } from 'discord.js';
 import { randomUUID } from 'crypto';
 import { config } from '../../config.js';
 import {
@@ -35,18 +26,6 @@ import {
   proxyDisplayName,
 } from '../../utils/discord.js';
 import { ReceiptSession, UserTotal } from '../../receipt/types.js';
-
-export async function messageReplyWrapper(message: Message, text: any): Promise<void> {
-  try {
-    await message.reply(text);
-  } catch (err: any) {
-    if (err?.json?.includes('MAX_EMBED_SIZE_EXCEEDED') && text.embeds) {
-      for (let i = 0; i < text.embeds.length; i++) {
-        await message.reply(text.embeds[i]);
-      }
-    }
-  }
-}
 
 export function registerMessageCreateEvent(client: Client): void {
   client.on('messageCreate', async (message: Message) => {
@@ -215,7 +194,7 @@ async function handleLeaderboard(message: Message): Promise<void> {
     });
   }
 
-  await messageReplyWrapper(message, { embeds: [embed] });
+  await message.reply({ embeds: [embed] });
 }
 
 async function handleAddTotal(message: Message): Promise<void> {
@@ -380,13 +359,13 @@ async function handleSum(message: Message, client: Client, markPaid: boolean): P
       .setTitle('✅ Marked as Paid')
       .setColor(0x2ecc71)
       .setDescription(lines.join('\n'));
-    await messageReplyWrapper(message, { embeds: [embed] });
+    await message.reply({ embeds: [embed] });
   } else {
     const embed = new EmbedBuilder()
       .setTitle('💰 Your Unpaid Totals')
       .setColor(0xe74c3c)
       .setDescription(lines.join('\n') + '\n\nReply `@bot sum paid` to mark all as paid.');
-    await messageReplyWrapper(message, { embeds: [embed] });
+    await message.reply({ embeds: [embed] });
   }
 }
 
@@ -684,7 +663,7 @@ async function handleClaim(
     const paid = payments.find((p) => p.userId === targetUserId)?.paid ?? false;
     const embed = buildUserEmbed(ut, paid, splits, refreshedSession, displayName);
     embed.setDescription("Reply `paid` / `p` when you've paid.");
-    await messageReplyWrapper(message, { embeds: [embed] });
+    await message.reply({ embeds: [embed] });
   }
 
   await updateSummaryMessage(message, refreshedSession);
@@ -1202,7 +1181,15 @@ async function handleStatus(message: Message, session: ReceiptSession): Promise<
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
   const embeds = buildSummaryEmbeds(session, items, userTotals, payments, splits, displayName);
-  await messageReplyWrapper(message, { embeds: [embeds] });
+  try {
+    await message.reply({ embeds });
+  } catch (err: any) {
+    if (err?.code == 50035) {
+      for (let i = 0; i < embeds.length; i++) {
+        await message.reply(`${embeds[i]}`);
+      }
+    }
+  }
 }
 
 async function handleDiscountCommand(
