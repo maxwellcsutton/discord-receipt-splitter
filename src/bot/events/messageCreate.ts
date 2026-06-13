@@ -14,10 +14,7 @@ import {
 import { randomUUID } from 'crypto';
 import { config } from '../../config.js';
 import {
-  parseReceiptImage,
-  expandLineItems,
-  validateReceipt,
-  subtotalItemsDiff,
+  parseReceiptWithReconciliation,
 } from '../../receipt/parser.js';
 import {
   buildSummaryEmbeds,
@@ -469,31 +466,13 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
   const buffer = Buffer.from(await response.arrayBuffer());
   const imageBase64 = buffer.toString('base64');
 
-  const first = await parseReceiptImage(imageBase64, mediaType);
-  manager.logApiCost(first.estimatedCostUsd);
+  const result = await parseReceiptWithReconciliation(imageBase64, mediaType);
+  manager.logApiCost(result.estimatedCostUsd);
 
-  let parsed = first.parsed;
-  let allItems = expandLineItems(parsed);
-  let warning = validateReceipt(parsed, allItems);
-  let wasRescanned = false;
-
-  if (warning) {
-    const itemsSum = allItems.reduce((s, i) => s + i.unitPrice, 0);
-    const retryHint = `Previous scan produced items summing to $${itemsSum.toFixed(2)} vs subtotal $${parsed.subtotal.toFixed(2)}. Ensure modifier/add-on prices are included in the parent item's line_total, not listed separately.`;
-    const retry = await parseReceiptImage(imageBase64, mediaType, retryHint);
-    manager.logApiCost(retry.estimatedCostUsd);
-    const retryItems = expandLineItems(retry.parsed);
-    const retryWarning = validateReceipt(retry.parsed, retryItems);
-
-    const firstDiff = subtotalItemsDiff(parsed, allItems);
-    const retryDiff = subtotalItemsDiff(retry.parsed, retryItems);
-    if (retryDiff < firstDiff) {
-      parsed = retry.parsed;
-      allItems = retryItems;
-      warning = retryWarning;
-    }
-    wasRescanned = true;
-  }
+  const parsed = result.parsed;
+  const allItems = result.items;
+  const warning = result.warning;
+  const wasRescanned = result.retried;
 
   const lineItems = allItems.filter((item) => item.unitPrice > 0);
 
@@ -1145,12 +1124,13 @@ async function handleRescan(
   const buffer = Buffer.from(await response.arrayBuffer());
   const imageBase64 = buffer.toString('base64');
 
-  const { parsed, estimatedCostUsd } = await parseReceiptImage(imageBase64, mediaType, hint || undefined);
-  manager.logApiCost(estimatedCostUsd);
+  const result = await parseReceiptWithReconciliation(imageBase64, mediaType, hint || undefined);
+  manager.logApiCost(result.estimatedCostUsd);
 
-  const allItems = expandLineItems(parsed);
+  const parsed = result.parsed;
+  const allItems = result.items;
   const lineItems = allItems.filter((item) => item.unitPrice > 0);
-  const warning = validateReceipt(parsed, allItems);
+  const warning = result.warning;
 
   // Preserve existing tip behavior: keep current tipAmount, don't default-apply again
   manager.replaceSessionItems(session.id, lineItems, {
