@@ -131,9 +131,10 @@ export function getPaymentStatuses(
 export function recordSettlement(
   guildId: string,
   restaurantName: string,
-  userTotals: { userId: string; grandTotal: number }[]
+  userTotals: { userId: string; grandTotal: number; tipShare?: number }[],
+  sessionId?: string | null
 ): void {
-  store.recordSettlement(guildId, restaurantName, userTotals);
+  store.recordSettlement(guildId, restaurantName, userTotals, sessionId);
 }
 
 export function getLeaderboard(guildId: string): {
@@ -144,6 +145,13 @@ export function getLeaderboard(guildId: string): {
     restaurants: store.getTopRestaurants(guildId),
     users: store.getTopUsers(guildId),
   };
+}
+
+export function getPersonalStats(
+  guildId: string,
+  userId: string
+): store.PersonalStats {
+  return store.getPersonalStats(guildId, userId);
 }
 
 export function checkDailyLimit(): void {

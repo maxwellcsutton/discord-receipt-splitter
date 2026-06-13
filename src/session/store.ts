@@ -1,10 +1,13 @@
+import { randomUUID } from "crypto";
 import { getDb } from "./migrations.js";
+import { config } from "../config.js";
 import {
   ReceiptSession,
   LineItem,
   SplitEntry,
   SessionStatus,
 } from "../receipt/types.js";
+import { calculateUserTotals } from "../receipt/calculator.js";
 
 // --- Sessions ---
 
@@ -411,7 +414,8 @@ export function replaceSessionItems(
 export function recordSettlement(
   guildId: string,
   restaurantName: string,
-  userTotals: { userId: string; grandTotal: number }[]
+  userTotals: { userId: string; grandTotal: number; tipShare?: number }[],
+  sessionId?: string | null
 ): void {
   const db = getDb();
 
@@ -430,13 +434,29 @@ export function recordSettlement(
       total_spend = total_spend + excluded.total_spend
   `);
 
+  const insertEntry = db.prepare(`
+    INSERT INTO settlement_entries
+      (settlement_id, guild_id, user_id, restaurant_name, amount, tip_share, session_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
   const receiptTotal = userTotals.reduce((sum, u) => sum + u.grandTotal, 0);
+  const settlementId = randomUUID();
 
   const transaction = db.transaction(() => {
     upsertRestaurant.run(guildId, restaurantName, receiptTotal);
     for (const ut of userTotals) {
       if (ut.grandTotal > 0) {
         upsertUser.run(guildId, ut.userId, ut.grandTotal);
+        insertEntry.run(
+          settlementId,
+          guildId,
+          ut.userId,
+          restaurantName,
+          ut.grandTotal,
+          ut.tipShare ?? 0,
+          sessionId ?? null
+        );
       }
     }
   });
@@ -473,9 +493,157 @@ export function getTopUsers(
   return rows.map((r) => ({ userId: r.user_id, totalSpend: r.total_spend }));
 }
 
-// --- API spend limit ---
+// --- Personal leaderboard ---
 
-const DAILY_LIMIT_USD = 0.10;
+export interface PersonalStats {
+  topRestaurants: { restaurantName: string; totalSpend: number; visits: number }[];
+  topPortions: { restaurantName: string; amount: number; settledAt: string }[];
+  lifetimeSpend: number;
+  receiptCount: number;
+  averagePortion: number;
+  mostVisited: { restaurantName: string; visits: number } | null;
+  totalTip: number;
+  rank: number | null;
+  rankOutOf: number;
+}
+
+export function getPersonalStats(guildId: string, userId: string): PersonalStats {
+  const db = getDb();
+
+  const topRestaurants = (
+    db
+      .prepare(
+        `SELECT restaurant_name, SUM(amount) AS total_spend, COUNT(*) AS visits
+         FROM settlement_entries
+         WHERE guild_id = ? AND user_id = ?
+         GROUP BY restaurant_name
+         ORDER BY total_spend DESC
+         LIMIT 5`
+      )
+      .all(guildId, userId) as any[]
+  ).map((r) => ({
+    restaurantName: r.restaurant_name,
+    totalSpend: r.total_spend,
+    visits: r.visits,
+  }));
+
+  const topPortions = (
+    db
+      .prepare(
+        `SELECT restaurant_name, amount, settled_at
+         FROM settlement_entries
+         WHERE guild_id = ? AND user_id = ?
+         ORDER BY amount DESC
+         LIMIT 5`
+      )
+      .all(guildId, userId) as any[]
+  ).map((r) => ({
+    restaurantName: r.restaurant_name,
+    amount: r.amount,
+    settledAt: r.settled_at,
+  }));
+
+  const totals = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS lifetime, COUNT(*) AS cnt,
+              COALESCE(SUM(tip_share), 0) AS tip
+       FROM settlement_entries
+       WHERE guild_id = ? AND user_id = ?`
+    )
+    .get(guildId, userId) as any;
+
+  const lifetimeSpend = totals.lifetime;
+  const receiptCount = totals.cnt;
+  const averagePortion = receiptCount > 0 ? lifetimeSpend / receiptCount : 0;
+  const mostVisited = topRestaurants.length
+    ? [...topRestaurants].sort((a, b) => b.visits - a.visits)[0]
+    : null;
+
+  // Rank among all spenders in the guild (1 = top spender).
+  const rankRow = db
+    .prepare(
+      `SELECT COUNT(*) AS above
+       FROM user_stats
+       WHERE guild_id = ? AND total_spend > (
+         SELECT total_spend FROM user_stats WHERE guild_id = ? AND user_id = ?
+       )`
+    )
+    .get(guildId, guildId, userId) as any;
+  const totalSpenders = (
+    db
+      .prepare("SELECT COUNT(*) AS cnt FROM user_stats WHERE guild_id = ?")
+      .get(guildId) as any
+  ).cnt;
+  const hasEntry = receiptCount > 0;
+
+  return {
+    topRestaurants,
+    topPortions,
+    lifetimeSpend,
+    receiptCount,
+    averagePortion,
+    mostVisited: mostVisited
+      ? { restaurantName: mostVisited.restaurantName, visits: mostVisited.visits }
+      : null,
+    totalTip: totals.tip,
+    rank: hasEntry ? rankRow.above + 1 : null,
+    rankOutOf: totalSpenders,
+  };
+}
+
+// --- Backfill ---
+
+// One-time backfill of settlement_entries from already-settled receipt sessions,
+// for databases that pre-date the settlement_entries table. addtotal-only
+// settlements kept no per-receipt detail and cannot be recovered.
+export function backfillSettlementEntries(): void {
+  const db = getDb();
+
+  const done = db
+    .prepare("SELECT value FROM meta WHERE key = 'settlement_backfill_v1'")
+    .get() as any;
+  if (done) return;
+
+  const sessions = db
+    .prepare("SELECT * FROM receipt_sessions WHERE status = 'settled'")
+    .all() as any[];
+
+  const insertEntry = db.prepare(`
+    INSERT INTO settlement_entries
+      (settlement_id, guild_id, user_id, restaurant_name, amount, tip_share, session_id, settled_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const tx = db.transaction(() => {
+    for (const row of sessions) {
+      const session = rowToSession(row);
+      const items = getLineItems(session.id);
+      const splits = getSplitItems(session.id);
+      const userTotals = calculateUserTotals(session, items, splits);
+      const settlementId = randomUUID();
+      for (const ut of userTotals) {
+        if (ut.grandTotal > 0) {
+          insertEntry.run(
+            settlementId,
+            session.guildId,
+            ut.userId,
+            session.restaurantName,
+            ut.grandTotal,
+            ut.tipShare,
+            session.id,
+            session.createdAt
+          );
+        }
+      }
+    }
+    db.prepare(
+      "INSERT INTO meta (key, value) VALUES ('settlement_backfill_v1', ?)"
+    ).run(new Date().toISOString());
+  });
+  tx();
+}
+
+// --- API spend limit ---
 
 export function getDailyApiCost(date: string): number {
   const db = getDb();
@@ -496,9 +664,9 @@ export function addApiCost(date: string, costUsd: number): void {
 export function checkDailyLimit(): void {
   const today = new Date().toISOString().slice(0, 10);
   const used = getDailyApiCost(today);
-  if (used >= DAILY_LIMIT_USD) {
+  if (used >= config.dailySpendLimitUsd) {
     throw new Error(
-      `Daily API spend limit reached ($${DAILY_LIMIT_USD.toFixed(2)}/day). Used: $${used.toFixed(4)}. Resets at midnight UTC.`
+      `Daily API spend limit reached ($${config.dailySpendLimitUsd.toFixed(2)}/day). Used: $${used.toFixed(4)}. Resets at midnight UTC.`
     );
   }
 }

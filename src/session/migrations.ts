@@ -89,6 +89,26 @@ export function initDatabase(): void {
       date TEXT NOT NULL PRIMARY KEY,
       estimated_cost_usd REAL NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS settlement_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      settlement_id TEXT NOT NULL,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      restaurant_name TEXT NOT NULL,
+      amount REAL NOT NULL,
+      tip_share REAL NOT NULL DEFAULT 0,
+      session_id TEXT,
+      settled_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_settlement_user
+      ON settlement_entries (guild_id, user_id);
+
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Migration: add discount_amount to existing databases that pre-date this column

@@ -16,7 +16,6 @@ source .env
 missing=()
 [ -z "${DISCORD_TOKEN:-}" ] && missing+=("DISCORD_TOKEN")
 [ -z "${ANTHROPIC_API_KEY:-}" ] && missing+=("ANTHROPIC_API_KEY")
-[ -z "${MONITORED_CHANNEL_IDS:-}" ] && missing+=("MONITORED_CHANNEL_IDS")
 
 if [ ${#missing[@]} -gt 0 ]; then
   echo "ERROR: The following required env vars are missing or empty in .env:"

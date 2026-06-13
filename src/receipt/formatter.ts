@@ -196,6 +196,7 @@ export function formatChannelHelp(): string {
     "`@bot sum` — show your unpaid totals across all receipts",
     "`@bot sum paid` — mark all your unpaid items as paid",
     "`@bot leaderboard` — show the top restaurants and spenders",
+    "`@bot personal leaderboard` — show your own spending stats",
     "`@bot addtotal <restaurant> <amount>` — manually log a receipt to the leaderboard",
     "`@bot help` — show this message",
   ].join("\n");

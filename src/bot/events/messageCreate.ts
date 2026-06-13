@@ -118,6 +118,15 @@ export function registerMessageCreateEvent(client: Client): void {
         return;
       }
 
+      // Personal leaderboard (check before the global leaderboard)
+      if (
+        content.includes('leaderboard') &&
+        (content.includes('personal') || content.includes(' me ') || content.includes(' my '))
+      ) {
+        await handlePersonalLeaderboard(message);
+        return;
+      }
+
       // Leaderboard command
       if (content.includes('leaderboard')) {
         await handleLeaderboard(message);
@@ -263,6 +272,61 @@ async function handleLeaderboard(message: Message): Promise<void> {
   await message.reply({ embeds: [embed] });
 }
 
+async function handlePersonalLeaderboard(message: Message): Promise<void> {
+  if (!message.guildId || !message.guild) {
+    await message.reply('Personal stats are only available in servers.');
+    return;
+  }
+
+  const userId = message.author.id;
+  const stats = manager.getPersonalStats(message.guildId, userId);
+
+  if (stats.receiptCount === 0) {
+    await message.reply("You have no settled receipts yet — nothing to show.");
+    return;
+  }
+
+  const displayName = (await buildDisplayNameResolver(message.guild, [userId]))(userId);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📊 ${displayName}'s Receipt Stats`)
+    .setColor(0x9b59b6);
+
+  // Headline: lifetime spend, receipts, average, rank
+  const headline = [
+    `**Lifetime spend:** $${stats.lifetimeSpend.toFixed(2)} across ${stats.receiptCount} receipt${stats.receiptCount !== 1 ? 's' : ''}`,
+    `**Average per receipt:** $${stats.averagePortion.toFixed(2)}`,
+    `**Total tip paid:** $${stats.totalTip.toFixed(2)}`,
+  ];
+  if (stats.rank !== null) {
+    headline.push(`**Server rank:** #${stats.rank} of ${stats.rankOutOf} spender${stats.rankOutOf !== 1 ? 's' : ''}`);
+  }
+  if (stats.mostVisited) {
+    headline.push(
+      `**Most visited:** ${stats.mostVisited.restaurantName} (${stats.mostVisited.visits} visit${stats.mostVisited.visits !== 1 ? 's' : ''})`,
+    );
+  }
+  embed.setDescription(headline.join('\n'));
+
+  if (stats.topRestaurants.length > 0) {
+    const lines = stats.topRestaurants.map(
+      (r, i) =>
+        `${i + 1}. **${r.restaurantName}** — $${r.totalSpend.toFixed(2)} (${r.visits} visit${r.visits !== 1 ? 's' : ''})`,
+    );
+    embed.addFields({ name: 'Top Restaurants by Spend', value: lines.join('\n'), inline: false });
+  }
+
+  if (stats.topPortions.length > 0) {
+    const lines = stats.topPortions.map((p, i) => {
+      const date = p.settledAt.slice(0, 10);
+      return `${i + 1}. **$${p.amount.toFixed(2)}** — ${p.restaurantName} (${date})`;
+    });
+    embed.addFields({ name: 'Most Expensive Receipts', value: lines.join('\n'), inline: false });
+  }
+
+  await message.reply({ embeds: [embed] });
+}
+
 async function handleAddTotal(message: Message): Promise<void> {
   if (!message.guildId || !message.guild) {
     await message.reply('This command is only available in servers.');
@@ -397,7 +461,7 @@ async function handleSum(message: Message, client: Client, markPaid: boolean): P
         const { allPaid } = manager.checkAllClaimedAndPaid(refreshedSession);
         if (allPaid) {
           const primaryName = displayName(session.primaryUserId);
-          manager.recordSettlement(session.guildId, session.restaurantName, userTotals);
+          manager.recordSettlement(session.guildId, session.restaurantName, userTotals, session.id);
           await thread.send(
             `🎉 **${primaryName}** — All payments for **${session.restaurantName}** have been received!`,
           );
@@ -1384,7 +1448,7 @@ async function checkAndNotify(message: Message, session: ReceiptSession): Promis
     const primaryName = displayName(session.primaryUserId);
 
     const userTotals = manager.getUserTotals(session);
-    manager.recordSettlement(session.guildId, session.restaurantName, userTotals);
+    manager.recordSettlement(session.guildId, session.restaurantName, userTotals, session.id);
 
     await thread.send(
       `🎉 **${primaryName}** — All payments for **${session.restaurantName}** have been received!`,

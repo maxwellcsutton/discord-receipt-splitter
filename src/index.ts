@@ -4,6 +4,7 @@ import { createClient } from "./bot/client.js";
 import { registerReadyEvent } from "./bot/events/ready.js";
 import { registerMessageCreateEvent } from "./bot/events/messageCreate.js";
 import { initDatabase } from "./session/migrations.js";
+import { backfillSettlementEntries } from "./session/store.js";
 
 // Health check server for Railway
 const port = process.env.PORT || 3000;
@@ -28,6 +29,7 @@ fetch("https://discord.com/api/v10/gateway/bot", {
 const client = createClient();
 
 initDatabase();
+backfillSettlementEntries();
 registerReadyEvent(client);
 registerMessageCreateEvent(client);
 
