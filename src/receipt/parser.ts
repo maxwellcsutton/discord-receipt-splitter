@@ -4,13 +4,36 @@ import { ParsedReceipt, LineItem } from "./types.js";
 
 const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
 
-const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+// CLAUDE_MODEL accepts a short alias (`haiku` | `sonnet` | `opus`) or a full
+// model id. Aliases also carry the right per-MTok pricing so daily-spend
+// accounting stays correct when the model changes. Sonnet is the default —
+// its vision reasoning handles skewed/angled receipts far better than Haiku.
+interface ModelChoice {
+  id: string;
+  inputPerMTok: number;
+  outputPerMTok: number;
+}
 
-// Sonnet 4.6 pricing (per token). Sonnet's stronger vision reasoning is worth
-// the higher per-token cost on skewed/angled receipts, where item↔price row
-// alignment is the hard part.
-const COST_PER_INPUT_TOKEN = 3.00 / 1_000_000;
-const COST_PER_OUTPUT_TOKEN = 15.00 / 1_000_000;
+const MODEL_ALIASES: Record<string, ModelChoice> = {
+  haiku: { id: "claude-haiku-4-5", inputPerMTok: 1.0, outputPerMTok: 5.0 },
+  sonnet: { id: "claude-sonnet-4-6", inputPerMTok: 3.0, outputPerMTok: 15.0 },
+  opus: { id: "claude-opus-4-8", inputPerMTok: 5.0, outputPerMTok: 25.0 },
+};
+
+function resolveModel(): ModelChoice {
+  const raw = (process.env.CLAUDE_MODEL || "sonnet").trim();
+  const alias = MODEL_ALIASES[raw.toLowerCase()];
+  if (alias) return alias;
+  // A full model id was provided — keep it, but infer pricing from the family
+  // name so cost tracking is still roughly right (defaults to Sonnet's rates).
+  const family = Object.keys(MODEL_ALIASES).find((k) => raw.toLowerCase().includes(k));
+  return { ...(family ? MODEL_ALIASES[family] : MODEL_ALIASES.sonnet), id: raw };
+}
+
+const MODEL_CHOICE = resolveModel();
+const MODEL = MODEL_CHOICE.id;
+const COST_PER_INPUT_TOKEN = MODEL_CHOICE.inputPerMTok / 1_000_000;
+const COST_PER_OUTPUT_TOKEN = MODEL_CHOICE.outputPerMTok / 1_000_000;
 
 // Claude returns one entry per receipt line — quantity, line_total, and the
 // printed per-unit price when the line shows one (e.g. "5 @18.99"). We handle
@@ -153,23 +176,42 @@ function rollUpModifiers(items: RawReceiptItem[], subtotal: number): RawReceiptI
   return result;
 }
 
+// Sends the vision request. Adaptive thinking + effort materially help the
+// per-line/anchor cross-checks (e.g. "5 @18.99 must be 94.95; a $94.95
+// strawberry is absurd") on capable models like Sonnet 4.6 — but not every
+// model supports them. We attempt with them and transparently retry without if
+// the model rejects them, so the bot works regardless of the configured model.
+async function createReceiptMessage(
+  messages: Anthropic.MessageParam[],
+): Promise<Anthropic.Message> {
+  const base = { model: MODEL, max_tokens: 8192, messages };
+  try {
+    return await anthropic.messages.create({
+      ...base,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
+    });
+  } catch (err) {
+    if (
+      err instanceof Anthropic.APIError &&
+      err.status === 400 &&
+      /thinking|effort|output_config/i.test(String(err.message))
+    ) {
+      return anthropic.messages.create(base);
+    }
+    throw err;
+  }
+}
+
 export async function parseReceiptImage(
   imageBase64: string,
   mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp",
   userHint?: string,
 ): Promise<ParseResult> {
-  const response = await anthropic.messages.create({
-    // Adaptive thinking lets the model run the per-line/anchor cross-checks
-    // (e.g. "5 @18.99 must be 94.95; a $94.95 strawberry is absurd") before
-    // committing to JSON. max_tokens must cover thinking + output.
-    model: MODEL,
-    max_tokens: 8192,
-    thinking: { type: "adaptive" },
-    output_config: { effort: "medium" },
-    messages: [
-      {
-        role: "user",
-        content: [
+  const response = await createReceiptMessage([
+    {
+      role: "user",
+      content: [
           {
             type: "image",
             source: { type: "base64", media_type: mediaType, data: imageBase64 },
@@ -205,11 +247,10 @@ WARNING — matching the subtotal is necessary but NOT sufficient: if you shift 
 
 Return ONLY valid JSON matching this schema, no commentary:
 ${JSON.stringify(RECEIPT_SCHEMA)}`,
-          },
-        ],
-      },
-    ],
-  });
+        },
+      ],
+    },
+  ]);
 
   const textBlock = response.content.find((b) => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {
