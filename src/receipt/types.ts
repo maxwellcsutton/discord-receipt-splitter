@@ -3,6 +3,9 @@ export interface ParsedReceiptItem {
   quantity: number;
   unit_price: number;
   total_price: number;
+  // Per-unit price printed on the receipt line (e.g. "18.99" in "5 @18.99"),
+  // or null. Used to anchor line totals against skew-induced price shifts.
+  printed_unit_price: number | null;
 }
 
 export interface ParsedReceipt {

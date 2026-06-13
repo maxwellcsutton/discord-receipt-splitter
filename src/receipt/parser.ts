@@ -12,16 +12,21 @@ const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
 const COST_PER_INPUT_TOKEN = 3.00 / 1_000_000;
 const COST_PER_OUTPUT_TOKEN = 15.00 / 1_000_000;
 
-// Claude returns one entry per receipt line — quantity and line_total only.
-// We handle division and expansion in code.
+// Claude returns one entry per receipt line — quantity, line_total, and the
+// printed per-unit price when the line shows one (e.g. "5 @18.99"). We handle
+// division and expansion in code.
 const RAW_ITEM_SCHEMA = {
   type: "object" as const,
   properties: {
     name: { type: "string" as const },
     quantity: { type: "integer" as const },
     line_total: { type: "number" as const },
+    // The per-unit price PRINTED on the line (the "18.99" in "5 @18.99"), or
+    // null when no per-unit price is shown. This is an alignment anchor: it
+    // sits next to its item, so it survives a skewed/shifted price column.
+    printed_unit_price: { type: ["number", "null"] as const },
   },
-  required: ["name", "quantity", "line_total"] as const,
+  required: ["name", "quantity", "line_total", "printed_unit_price"] as const,
   additionalProperties: false,
 };
 
@@ -46,6 +51,7 @@ interface RawReceiptItem {
   name: string;
   quantity: number;
   line_total: number;
+  printed_unit_price: number | null;
 }
 
 interface RawReceipt {
@@ -153,8 +159,13 @@ export async function parseReceiptImage(
   userHint?: string,
 ): Promise<ParseResult> {
   const response = await anthropic.messages.create({
+    // Adaptive thinking lets the model run the per-line/anchor cross-checks
+    // (e.g. "5 @18.99 must be 94.95; a $94.95 strawberry is absurd") before
+    // committing to JSON. max_tokens must cover thinking + output.
     model: MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium" },
     messages: [
       {
         role: "user",
@@ -169,6 +180,9 @@ export async function parseReceiptImage(
 - name: the item name, stripped of any parenthetical numbers (e.g. "Mild Spicy Lamb Kebab(5)" → "Mild Spicy Lamb Kebab")
 - quantity: the number in the LEFTMOST column of that line. This is the only source of truth for quantity. Numbers inside the item name (like the "(5)" or "(1)") are NOT the quantity — ignore them.
 - line_total: the TOTAL price charged for this item (see MODIFIERS below)
+- printed_unit_price: if the line shows a per-unit price like "5 @18.99" or "2 @ 4.59", record that per-unit number (18.99, 4.59). Otherwise null. This is the price PRINTED on the line, not something you compute.
+
+PER-UNIT PRICES ("N @ X.XX"): when a line shows a quantity and a per-unit price together — e.g. "Country Steak & Eggs (5 @18.99)" — it means 5 units at $18.99 each, so the line_total is 5 × 18.99 = 94.95. The printed per-unit price is AUTHORITATIVE: set quantity=5, printed_unit_price=18.99, line_total=94.95. NEVER infer a unit price by dividing a line_total by the quantity — if you find yourself computing "16.49 ÷ 5 = 3.30", you have grabbed the wrong line_total. The printed per-unit price sits right next to its item, so use it to anchor that row even if the price column looks shifted.
 
 MODIFIERS / ADD-ONS: Many receipts show modifiers, add-ons, options, or customizations INDENTED beneath a parent item (e.g. "Arrachera $2.16", "Add Guacamole $1.08", "Chile Guero $0.00" under a "Burrito" line). These are NOT separate items — they are upcharges or options that belong to the parent item. For each parent item:
 - Sum the parent's base price with the prices of all its indented modifier lines to produce line_total
@@ -185,7 +199,9 @@ Also extract subtotal, discount (0 if none), tax, tip (null if not on receipt), 
 
 PRICE ALIGNMENT (receipts are often photographed at an angle): item names run down the left, prices down the right. When the photo is skewed, a price can sit slightly higher or lower than the item it belongs to, so the two columns drift out of step. Read each row by following the item across to the price on its line — do NOT blindly pair the Nth item with the Nth price. If a price looks implausible for an item (a side or drink priced like an entrée, or vice versa), the alignment is probably off by a row.
 
-SELF-CHECK AGAINST THE SUBTOTAL: after assigning every line_total, add them all up (including any rolled-up modifier prices). The sum must equal the printed subtotal. If it does not, the item↔price mapping is almost certainly shifted — a skewed photo typically offsets the prices by a consistent number of rows. Re-trace the rows, re-assign prices until the line_totals sum to the subtotal, and return that corrected result.
+SELF-CHECK AGAINST THE SUBTOTAL: after assigning every line_total, add them all up (including any rolled-up modifier prices). The sum must equal the printed subtotal. If it does not, the item↔price mapping is shifted — a skewed photo typically offsets the prices by a consistent number of rows. Re-trace the rows and re-assign prices.
+
+WARNING — matching the subtotal is necessary but NOT sufficient: if you shift the whole price column by one row, the totals still add up to the same subtotal even though every item now has the wrong price. So do not just shuffle prices until the sum works. Verify each individual line: does this price belong to THIS item, on THIS row? Use the printed per-unit prices as fixed anchors (a "5 @18.99" line must total 94.95 no matter what), and sanity-check plausibility (a side/drink/modifier should not cost more than an entrée). Return the mapping where each line is individually correct.
 
 Return ONLY valid JSON matching this schema, no commentary:
 ${JSON.stringify(RECEIPT_SCHEMA)}`,
@@ -223,6 +239,7 @@ ${JSON.stringify(RECEIPT_SCHEMA)}`,
         quantity: item.quantity,
         unit_price: unitPrice,
         total_price: Math.round(item.line_total * 100) / 100,
+        printed_unit_price: item.printed_unit_price ?? null,
       };
     }),
     subtotal: raw.subtotal,
@@ -293,26 +310,100 @@ export function validateReceipt(
   return null;
 }
 
-// Builds a focused retry hint for when line items don't sum to the subtotal.
-// The dominant cause on real photos is skew shifting the price column relative
-// to the items, so we name that explicitly and hand back the failed mapping so
-// the model can re-align rather than re-deriving from scratch.
+interface UnitPriceMismatch {
+  name: string;
+  quantity: number;
+  printedUnitPrice: number;
+  expectedTotal: number;
+  actualTotal: number;
+}
+
+// Lines that print a per-unit price ("5 @18.99") must satisfy
+// line_total ≈ quantity × printed_unit_price. Unlike the subtotal sum, this
+// check is NOT invariant under a row-shift permutation — it's how we catch a
+// skewed price column that still happens to add up to the subtotal.
+function unitPriceMismatches(parsed: ParsedReceipt): UnitPriceMismatch[] {
+  const mismatches: UnitPriceMismatch[] = [];
+  for (const it of parsed.items) {
+    const unit = it.printed_unit_price;
+    if (unit === null || unit <= 0 || it.quantity < 1) continue;
+    const expected = Math.round(it.quantity * unit * 100) / 100;
+    if (Math.abs(it.total_price - expected) > 0.05) {
+      mismatches.push({
+        name: it.name,
+        quantity: it.quantity,
+        printedUnitPrice: unit,
+        expectedTotal: expected,
+        actualTotal: it.total_price,
+      });
+    }
+  }
+  return mismatches;
+}
+
+// A scan is "off" if its items don't sum to the subtotal OR any printed
+// per-unit line doesn't reconcile. Lower score = better; mismatched anchor
+// lines dominate (they're strong evidence of misalignment), with the subtotal
+// gap as a tie-breaker.
+function reconciliationScore(parsed: ParsedReceipt, items: LineItem[]): number {
+  return unitPriceMismatches(parsed).length * 1000 + subtotalItemsDiff(parsed, items);
+}
+
+function reconciliationWarning(parsed: ParsedReceipt, items: LineItem[]): string | null {
+  const mismatches = unitPriceMismatches(parsed);
+  if (mismatches.length > 0) {
+    const lines = mismatches
+      .map(
+        (m) =>
+          `“${m.name}” is ${m.quantity} @ $${m.printedUnitPrice.toFixed(2)} = $${m.expectedTotal.toFixed(2)}, but got $${m.actualTotal.toFixed(2)}`,
+      )
+      .join("; ");
+    return `Warning: per-unit prices don't reconcile (${lines}). The price column may be misaligned.`;
+  }
+  return validateReceipt(parsed, items);
+}
+
+// Builds a focused retry hint. Leads with the printed per-unit anchors (the
+// strongest correction signal — they pin specific rows), then the subtotal gap,
+// then hands back the failed mapping so the model re-aligns rather than
+// re-deriving from scratch.
 function buildAlignmentRetryHint(
   parsed: ParsedReceipt,
   items: LineItem[],
   userHint?: string,
 ): string {
   const itemsSum = items.reduce((s, i) => s + i.unitPrice, 0);
+  const subtotalDiff = Math.abs(itemsSum - parsed.subtotal);
+  const mismatches = unitPriceMismatches(parsed);
   const breakdown = parsed.items
     .map((it) => `  - ${it.name}: $${it.total_price.toFixed(2)}`)
     .join("\n");
+
+  const anchorBlock =
+    mismatches.length > 0
+      ? [
+          `Some lines print their own per-unit price, which fixes their total regardless of how the column lines up. These are WRONG and must be corrected:`,
+          ...mismatches.map(
+            (m) =>
+              `  - “${m.name}” is printed as ${m.quantity} @ $${m.printedUnitPrice.toFixed(2)}, so its line total must be $${m.expectedTotal.toFixed(2)} — you reported $${m.actualTotal.toFixed(2)}.`,
+          ),
+          `Pin those lines to their correct totals, then re-align the rest of the price column around them (the whole column is likely shifted by a row).`,
+        ].join("\n")
+      : "";
+
+  const subtotalBlock =
+    subtotalDiff > 0.5
+      ? `The line items sum to $${itemsSum.toFixed(2)} but the subtotal is $${parsed.subtotal.toFixed(2)}.`
+      : `Note: the totals happen to sum to the subtotal, but that does NOT mean the mapping is right — a one-row shift of the whole column preserves the sum. Verify each line individually.`;
+
   return [
     userHint ? `${userHint}\n` : "",
-    `The previous scan's line items sum to $${itemsSum.toFixed(2)}, but the printed subtotal is $${parsed.subtotal.toFixed(2)} — they don't match, so prices are mapped to the wrong items.`,
-    `This receipt is likely photographed at an angle, which offsets the price column from the item column by a row or two.`,
+    `The previous scan mapped prices to the wrong items. This receipt is likely photographed at an angle, which offsets the price column from the item column by a row or two.`,
+    anchorBlock,
+    subtotalBlock,
     `Previous (incorrect) mapping:`,
     breakdown,
-    `Re-read the receipt, trace each item across to the price on its row, and re-assign prices so every line_total is correct and the sum of all line_totals equals the subtotal of $${parsed.subtotal.toFixed(2)}. Also confirm modifier/add-on prices are folded into their parent item rather than listed as separate lines.`,
+    `Re-read the receipt, trace each item across to the price on its own row, use any printed per-unit prices as fixed anchors, and return a mapping where every individual line is correct.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -326,10 +417,10 @@ export interface ReconciledParseResult {
   retried: boolean;
 }
 
-// Parse the receipt and, if the line items don't reconcile to the subtotal,
-// retry once with a skew-aware hint. Keeps whichever attempt lands closest to
-// the subtotal. Used by both the initial scan and the manual `rescan` command
-// so both self-correct on angled receipts.
+// Parse the receipt and, if it doesn't reconcile (subtotal mismatch OR a
+// printed per-unit line that doesn't add up), retry once with a targeted hint.
+// Keeps whichever attempt reconciles best. Used by both the initial scan and
+// the manual `rescan` command so both self-correct on angled receipts.
 export async function parseReceiptWithReconciliation(
   imageBase64: string,
   mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp",
@@ -338,7 +429,7 @@ export async function parseReceiptWithReconciliation(
   const first = await parseReceiptImage(imageBase64, mediaType, userHint);
   let parsed = first.parsed;
   let items = expandLineItems(parsed);
-  let warning = validateReceipt(parsed, items);
+  let warning = reconciliationWarning(parsed, items);
   let estimatedCostUsd = first.estimatedCostUsd;
 
   if (!warning) {
@@ -351,13 +442,13 @@ export async function parseReceiptWithReconciliation(
   const retryItems = expandLineItems(retry.parsed);
 
   if (
-    subtotalItemsDiff(retry.parsed, retryItems) <
-    subtotalItemsDiff(parsed, items)
+    reconciliationScore(retry.parsed, retryItems) <
+    reconciliationScore(parsed, items)
   ) {
     parsed = retry.parsed;
     items = retryItems;
-    warning = validateReceipt(parsed, items);
   }
+  warning = reconciliationWarning(parsed, items);
 
   return { parsed, items, warning, estimatedCostUsd, retried: true };
 }
