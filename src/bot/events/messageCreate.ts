@@ -24,6 +24,7 @@ import {
   formatChannelHelp,
 } from '../../receipt/formatter.js';
 import * as manager from '../../session/manager.js';
+import type { DateRange } from '../../session/store.js';
 import {
   parseItemNumbers,
   extractRestaurantName,
@@ -228,25 +229,140 @@ async function getDisplayNameResolver(
   return buildDisplayNameResolver(guild, [...allUserIds]);
 }
 
+// Parses the text after `leaderboard` into an optional restaurant filter and an
+// optional date window. Timeframe tokens (today/week/month/year, from/since/to
+// <date>, or bare YYYY-MM-DD) are consumed; whatever remains is the restaurant name.
+function parseLeaderboardArgs(message: Message): {
+  range?: DateRange;
+  label: string | null;
+  restaurant: string | null;
+} {
+  const stripped = message.content.replace(/<@!?\d+>/g, ' ');
+  const m = stripped.match(/leaderboard\b(.*)/is);
+  const rest = (m?.[1] ?? '').trim();
+  if (!rest) return { label: null, restaurant: null };
+
+  const tokens = rest.split(/\s+/).filter(Boolean);
+  const leftover: string[] = [];
+  let range: DateRange | undefined;
+  let label: string | null = null;
+
+  const now = new Date();
+  const toISODate = (d: Date) => d.toISOString().slice(0, 10);
+  const daysAgo = (n: number) => {
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() - n);
+    return toISODate(d);
+  };
+  const isDate = (s: string | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i].toLowerCase();
+    if (t === 'today') {
+      range = { ...(range ?? {}), from: toISODate(now) };
+      label = 'Today';
+    } else if (t === 'week') {
+      range = { ...(range ?? {}), from: daysAgo(6) };
+      label = 'Last 7 days';
+    } else if (t === 'month') {
+      range = { ...(range ?? {}), from: daysAgo(29) };
+      label = 'Last 30 days';
+    } else if (t === 'year') {
+      range = { ...(range ?? {}), from: daysAgo(364) };
+      label = 'Last 365 days';
+    } else if ((t === 'from' || t === 'since') && isDate(tokens[i + 1])) {
+      range = { ...(range ?? {}), from: tokens[++i] };
+    } else if (t === 'to' && isDate(tokens[i + 1])) {
+      range = { ...(range ?? {}), to: tokens[++i] };
+    } else if (isDate(tokens[i])) {
+      if (!range?.from) range = { ...(range ?? {}), from: tokens[i] };
+      else range = { ...range, to: tokens[i] };
+    } else {
+      leftover.push(tokens[i]);
+    }
+  }
+
+  // Build a human label for explicit ranges that didn't come from a keyword.
+  if (range && !label) {
+    if (range.from && range.to) label = `${range.from} to ${range.to}`;
+    else if (range.from) label = `Since ${range.from}`;
+    else if (range.to) label = `Through ${range.to}`;
+  }
+
+  const restaurantRaw = leftover.join(' ').trim();
+  const restaurant = restaurantRaw ? extractRestaurantName(restaurantRaw, '') : null;
+
+  return { range, label, restaurant };
+}
+
 async function handleLeaderboard(message: Message): Promise<void> {
-  if (!message.guildId) {
+  if (!message.guildId || !message.guild) {
     await message.reply('Leaderboard is only available in servers.');
     return;
   }
 
-  const { restaurants, users } = manager.getLeaderboard(message.guildId);
+  const guild = message.guild;
+  const { range, label, restaurant } = parseLeaderboardArgs(message);
 
-  if (restaurants.length === 0 && users.length === 0) {
-    await message.reply('No settled receipts yet — nothing to show.');
+  // Per-restaurant leaderboard
+  if (restaurant) {
+    const data = manager.getRestaurantLeaderboard(message.guildId, restaurant, range);
+    if (!data) {
+      await message.reply(
+        `No settled receipts for **${restaurant}**${label ? ` in ${label.toLowerCase()}` : ''} yet — nothing to show.`,
+      );
+      return;
+    }
+
+    const displayName =
+      data.topSpenders.length > 0
+        ? await buildDisplayNameResolver(
+            guild,
+            data.topSpenders.map((s) => s.userId),
+          )
+        : (_id: string) => 'Unknown';
+
+    const embed = new EmbedBuilder()
+      .setTitle(`🏆 ${restaurant} Leaderboard`)
+      .setColor(0xe67e22)
+      .setDescription(
+        [
+          label ? `_${label}_` : null,
+          `**Total spend:** $${data.totalSpend.toFixed(2)} across ${data.receiptCount} receipt${data.receiptCount !== 1 ? 's' : ''}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+
+    const lines = data.topSpenders.map(
+      (s, i) =>
+        `${i + 1}. **${displayName(s.userId)}** — $${s.totalSpend.toFixed(2)} (${s.visits} visit${s.visits !== 1 ? 's' : ''})`,
+    );
+    embed.addFields({ name: 'Top Spenders', value: lines.join('\n'), inline: false });
+
+    await message.reply({ embeds: [embed] });
     return;
   }
 
-  const guild = message.guild!;
+  // Global leaderboard — date-filtered reads from settlement_entries; all-time
+  // uses the pre-aggregated stats (which also include legacy addtotal totals).
+  const { restaurants, users } = range
+    ? manager.getFilteredLeaderboard(message.guildId, range)
+    : manager.getLeaderboard(message.guildId);
+
+  if (restaurants.length === 0 && users.length === 0) {
+    await message.reply(
+      `No settled receipts${label ? ` in ${label.toLowerCase()}` : ''} yet — nothing to show.`,
+    );
+    return;
+  }
+
   const userIds = users.map((u) => u.userId);
   const displayName =
     userIds.length > 0 ? await buildDisplayNameResolver(guild, userIds) : (_id: string) => 'Unknown';
 
   const embed = new EmbedBuilder().setTitle('🏆 Receipt Leaderboard').setColor(0x3498db);
+  if (label) embed.setDescription(`_${label}_`);
 
   if (restaurants.length > 0) {
     const lines = restaurants.map(

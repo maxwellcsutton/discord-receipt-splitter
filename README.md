@@ -1,4 +1,4 @@
-# Receipt Bot
+# Discord Receipt Splitter
 
 A Discord bot that splits restaurant receipts among users. Post a receipt photo, and the bot uses Claude's vision models to extract line items. Users claim their items, and the bot calculates each person's share including proportional tax and tip.
 
@@ -13,7 +13,7 @@ A Discord bot that splits restaurant receipts among users. Post a receipt photo,
 - **Discounts** — apply a flat or percentage discount that flows through to every item
 - **Proxy users** — add placeholders for people who aren't in Discord
 - **Payment tracking** — users mark themselves paid; the bot notifies when all payments are in
-- **Leaderboard** — track top restaurants and spenders across receipts, plus per-user personal stats
+- **Leaderboard** — track top restaurants and spenders across receipts, filter by a single restaurant or a date range/window, plus per-user personal stats. Proxy users are tracked too, and merge across receipts by name
 - **Concurrent receipts** — each receipt gets its own Discord thread
 - **Persistent storage** — SQLite database survives restarts
 - **Daily spend cap** — a built-in API-cost limit guards against runaway spend
@@ -23,7 +23,7 @@ A Discord bot that splits restaurant receipts among users. Post a receipt photo,
 ```bash
 # 1. Clone and install
 git clone <your-repo-url>
-cd receipt-bot
+cd discord-receipt-splitter
 npm install
 
 # 2. Configure environment
@@ -211,10 +211,15 @@ The primary user is whoever posted the receipt. These manage the receipt itself.
 |---------|-------------|
 | `@bot <image> @user1 @user2 [restaurant]` | Start a new receipt split |
 | `@bot sum` / `@bot sum paid` | Show/settle your unpaid totals across all receipts |
-| `@bot leaderboard` | Show top restaurants and spenders |
+| `@bot leaderboard` | Show top restaurants and spenders (all-time) |
+| `@bot leaderboard <restaurant>` | Per-restaurant leaderboard: total spend, receipt count, and top spenders at that restaurant (e.g. `leaderboard TK`) |
+| `@bot leaderboard <today\|week\|month\|year>` | Limit any leaderboard to a recent window (`week` = last 7 days, `month` = last 30, `year` = last 365) |
+| `@bot leaderboard from 2026-01-01 to 2026-03-31` | Limit to an explicit date range (`to` optional; `from`/`since` interchangeable) |
 | `@bot personal leaderboard` | Show your own spending stats (top restaurants, priciest receipts, lifetime spend, rank) |
 | `@bot addtotal [restaurant] @user1 amount1 @user2 amount2` | Manually log a receipt to the leaderboard |
 | `@bot help` | Show the channel command list |
+
+> **Combining leaderboard filters:** the restaurant and date filters compose — e.g. `@bot leaderboard TK month` or `@bot leaderboard Sakura from 2026-01-01`. Date-filtered leaderboards are computed from per-receipt settlement history, so any receipts settled before that history was tracked (older manual `addtotal` entries) only appear in the unfiltered all-time view.
 
 ## Prompting & Accuracy
 
@@ -280,13 +285,13 @@ Runs with hot reload via `tsx watch`. The script checks for `.env` and required 
 ```bash
 # Build
 npm run build
-docker build -t receipt-bot .
+docker build -t discord-receipt-splitter .
 
 # Run
 docker run -d \
   --env-file .env \
   -v receipt-data:/app/data \
-  receipt-bot
+  discord-receipt-splitter
 ```
 
 ## Project Structure

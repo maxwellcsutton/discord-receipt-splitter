@@ -1,7 +1,7 @@
 {
-  "name": "receipt-bot",
+  "name": "discord-receipt-splitter",
   "version": "1.0.0",
-  "description": "Discord bot for splitting restaurant receipts",
+  "description": "Discord bot for splitting restaurant receipts with Claude Vision",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

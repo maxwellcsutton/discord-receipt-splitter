@@ -493,6 +493,132 @@ export function getTopUsers(
   return rows.map((r) => ({ userId: r.user_id, totalSpend: r.total_spend }));
 }
 
+// --- Date-filtered & per-restaurant leaderboards ---
+//
+// These read from settlement_entries (which records every settlement — auto and
+// addtotal — including proxy users), so they support date ranges and per-restaurant
+// breakdowns that the pre-aggregated *_stats tables can't. Users are grouped
+// case-insensitively so a proxy like `proxy:Alice` and `proxy:alice` merge into one
+// persistent leaderboard entry across receipts.
+
+export interface DateRange {
+  from?: string; // 'YYYY-MM-DD', inclusive
+  to?: string; // 'YYYY-MM-DD', inclusive
+}
+
+// Builds a SQL fragment (leading " AND ...") comparing the date portion of
+// settled_at. Comparing the first 10 chars works for both stored formats
+// ("YYYY-MM-DD HH:MM:SS" from datetime('now') and ISO "YYYY-MM-DDT..." from backfill).
+function buildDateClause(range?: DateRange): { clause: string; params: string[] } {
+  const parts: string[] = [];
+  const params: string[] = [];
+  if (range?.from) {
+    parts.push("substr(settled_at, 1, 10) >= ?");
+    params.push(range.from);
+  }
+  if (range?.to) {
+    parts.push("substr(settled_at, 1, 10) <= ?");
+    params.push(range.to);
+  }
+  return { clause: parts.length ? " AND " + parts.join(" AND ") : "", params };
+}
+
+export function getFilteredLeaderboard(
+  guildId: string,
+  range?: DateRange,
+  limit = 5
+): {
+  restaurants: { restaurantName: string; totalSpend: number; receiptCount: number }[];
+  users: { userId: string; totalSpend: number }[];
+} {
+  const db = getDb();
+  const { clause, params } = buildDateClause(range);
+
+  const restaurants = (
+    db
+      .prepare(
+        `SELECT restaurant_name,
+                SUM(amount) AS total_spend,
+                COUNT(DISTINCT settlement_id) AS receipt_count
+         FROM settlement_entries
+         WHERE guild_id = ?${clause}
+         GROUP BY restaurant_name
+         ORDER BY total_spend DESC
+         LIMIT ?`
+      )
+      .all(guildId, ...params, limit) as any[]
+  ).map((r) => ({
+    restaurantName: r.restaurant_name,
+    totalSpend: r.total_spend,
+    receiptCount: r.receipt_count,
+  }));
+
+  const users = (
+    db
+      .prepare(
+        `SELECT MAX(user_id) AS user_id, SUM(amount) AS total_spend
+         FROM settlement_entries
+         WHERE guild_id = ?${clause}
+         GROUP BY LOWER(user_id)
+         ORDER BY total_spend DESC
+         LIMIT ?`
+      )
+      .all(guildId, ...params, limit) as any[]
+  ).map((r) => ({ userId: r.user_id, totalSpend: r.total_spend }));
+
+  return { restaurants, users };
+}
+
+export function getRestaurantLeaderboard(
+  guildId: string,
+  restaurantName: string,
+  range?: DateRange,
+  limit = 10
+): {
+  totalSpend: number;
+  receiptCount: number;
+  topSpenders: { userId: string; totalSpend: number; visits: number }[];
+} | null {
+  const db = getDb();
+  const { clause, params } = buildDateClause(range);
+
+  const summary = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS total_spend,
+              COUNT(DISTINCT settlement_id) AS receipt_count
+       FROM settlement_entries
+       WHERE guild_id = ? AND LOWER(restaurant_name) = LOWER(?)${clause}`
+    )
+    .get(guildId, restaurantName, ...params) as any;
+
+  if (!summary || summary.receipt_count === 0) return null;
+
+  const topSpenders = (
+    db
+      .prepare(
+        `SELECT MAX(user_id) AS user_id,
+                SUM(amount) AS total_spend,
+                COUNT(DISTINCT settlement_id) AS visits
+         FROM settlement_entries
+         WHERE guild_id = ? AND LOWER(restaurant_name) = LOWER(?)${clause}
+         GROUP BY LOWER(user_id)
+         ORDER BY total_spend DESC
+         LIMIT ?`
+      )
+      .all(guildId, restaurantName, ...params, limit) as any[]
+  ).map((r) => ({
+    userId: r.user_id,
+    totalSpend: r.total_spend,
+    visits: r.visits,
+  }));
+
+  return {
+    totalSpend: summary.total_spend,
+    receiptCount: summary.receipt_count,
+    topSpenders,
+  };
+}
+
 // --- Personal leaderboard ---
 
 export interface PersonalStats {

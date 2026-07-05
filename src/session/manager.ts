@@ -147,6 +147,28 @@ export function getLeaderboard(guildId: string): {
   };
 }
 
+export function getFilteredLeaderboard(
+  guildId: string,
+  range?: store.DateRange
+): {
+  restaurants: { restaurantName: string; totalSpend: number; receiptCount: number }[];
+  users: { userId: string; totalSpend: number }[];
+} {
+  return store.getFilteredLeaderboard(guildId, range);
+}
+
+export function getRestaurantLeaderboard(
+  guildId: string,
+  restaurantName: string,
+  range?: store.DateRange
+): {
+  totalSpend: number;
+  receiptCount: number;
+  topSpenders: { userId: string; totalSpend: number; visits: number }[];
+} | null {
+  return store.getRestaurantLeaderboard(guildId, restaurantName, range);
+}
+
 export function getPersonalStats(
   guildId: string,
   userId: string
