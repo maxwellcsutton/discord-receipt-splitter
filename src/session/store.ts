@@ -797,6 +797,41 @@ export function checkDailyLimit(): void {
   }
 }
 
+// Receipts uploaded by a user (they are the primary user), newest first.
+export function getRecentSessionsForUser(
+  guildId: string,
+  userId: string,
+  limit: number
+): ReceiptSession[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM receipt_sessions
+       WHERE guild_id = ? AND primary_user_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .all(guildId, userId, limit) as any[];
+  return rows.map(rowToSession);
+}
+
+// Open (not yet settled or voided) receipts uploaded by a user, newest first.
+export function getOpenSessionsForUser(
+  guildId: string,
+  userId: string
+): ReceiptSession[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM receipt_sessions
+       WHERE guild_id = ? AND primary_user_id = ?
+         AND status IN ('active', 'all_claimed')
+       ORDER BY created_at DESC`
+    )
+    .all(guildId, userId) as any[];
+  return rows.map(rowToSession);
+}
+
 export function getUnpaidSessionsForUser(
   guildId: string,
   userId: string

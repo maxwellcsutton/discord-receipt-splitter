@@ -192,6 +192,21 @@ export function getUnpaidSessionsForUser(
   return store.getUnpaidSessionsForUser(guildId, userId);
 }
 
+export function getRecentSessionsForUser(
+  guildId: string,
+  userId: string,
+  limit: number
+): ReceiptSession[] {
+  return store.getRecentSessionsForUser(guildId, userId, limit);
+}
+
+export function getOpenSessionsForUser(
+  guildId: string,
+  userId: string
+): ReceiptSession[] {
+  return store.getOpenSessionsForUser(guildId, userId);
+}
+
 export function checkAllClaimedAndPaid(session: ReceiptSession): {
   allClaimed: boolean;
   allPaid: boolean;

@@ -179,6 +179,7 @@ Aliases are shown after the `/`. In a thread, the bot reads every reply; in a ch
 | `claim 1 3 5` / `c 1 3 5` | Claim items by number (ranges like `1-3` work; bare numbers also work) |
 | `unclaim 1 3` / `uc 1 3` | Release claimed items |
 | `split 3 5 @user1 @user2` / `s ...` | Split item(s) between mentioned users (even, or `@user 30%` for uneven; proxy names allowed) |
+| `split all` / `s all` | Split every **unclaimed** item evenly among everyone on the receipt (claimed items are left untouched — never errors on them). Exclude items and/or users after `-`: `split all - 3 5 - @alice` |
 | `paid` / `p` | Mark yourself as paid |
 | `unpaid` / `up` | Mark yourself as unpaid |
 | `status` / `st` | Show current claim status |
@@ -211,6 +212,8 @@ The primary user is whoever posted the receipt. These manage the receipt itself.
 |---------|-------------|
 | `@bot <image> @user1 @user2 [restaurant]` | Start a new receipt split |
 | `@bot sum` / `@bot sum paid` | Show/settle your unpaid totals across all receipts |
+| `@bot recent [n]` (or bare `@bot 10`) | List your last _n_ uploaded receipts (default 10, max 25) with status — 🟢 Open / ✅ Closed / 🚫 Voided |
+| `@bot open` | List all your open (unsettled) receipts |
 | `@bot leaderboard` | Show top restaurants and spenders (all-time) |
 | `@bot leaderboard <restaurant>` | Per-restaurant leaderboard: total spend, receipt count, and top spenders at that restaurant (e.g. `leaderboard TK`) |
 | `@bot leaderboard <today\|week\|month\|year>` | Limit any leaderboard to a recent window (`week` = last 7 days, `month` = last 30, `year` = last 365) |

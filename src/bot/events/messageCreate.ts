@@ -140,6 +140,20 @@ export function registerMessageCreateEvent(client: Client): void {
         return;
       }
 
+      // Recent / open receipts uploaded by the requester.
+      // Guard on no image so a new-receipt submission whose caption is a bare
+      // number (e.g. a restaurant named "10") isn't swallowed here.
+      const hasImage = message.attachments.some((a) => a.contentType?.startsWith('image/'));
+      const cleaned = content.replace(/<@!?\d+>/g, '').trim();
+      if (!hasImage && (cleaned === 'open' || cleaned === 'open receipts')) {
+        await handleOpenReceipts(message);
+        return;
+      }
+      if (!hasImage && (/^recent\b/.test(cleaned) || /^\d+$/.test(cleaned))) {
+        await handleRecentReceipts(message, cleaned);
+        return;
+      }
+
       // Sum command (check "sum paid" before "sum")
       if (content.includes('sum paid')) {
         await handleSum(message, client, true);
@@ -511,6 +525,82 @@ async function handleAddTotal(message: Message): Promise<void> {
   await message.reply(
     `Added to leaderboard:\n**${restaurantName}** — $${total.toFixed(2)}\n${lines.join('\n')}`,
   );
+}
+
+// Human-readable status for a receipt, keyed off session.status.
+// active/all_claimed both read as "Open" (still accepting commands); a receipt
+// is "Closed" once fully paid (settled), and "Voided" if cancelled.
+function receiptStatusLabel(status: string): string {
+  switch (status) {
+    case 'settled':
+      return '✅ Closed';
+    case 'voided':
+      return '🚫 Voided';
+    default:
+      return '🟢 Open';
+  }
+}
+
+async function handleRecentReceipts(message: Message, cleaned: string): Promise<void> {
+  if (!message.guildId || !message.guild) {
+    await message.reply('This command is only available in servers.');
+    return;
+  }
+
+  let limit = 10;
+  const numMatch = cleaned.match(/\d+/);
+  if (numMatch) {
+    const parsed = parseInt(numMatch[0], 10);
+    if (!isNaN(parsed) && parsed > 0) limit = Math.min(parsed, 25);
+  }
+
+  const sessions = manager.getRecentSessionsForUser(message.guildId, message.author.id, limit);
+  if (sessions.length === 0) {
+    await message.reply("You haven't uploaded any receipts in this server yet.");
+    return;
+  }
+
+  const lines = sessions.map((s) => {
+    const date = s.createdAt.slice(0, 10);
+    return `${receiptStatusLabel(s.status)} — <#${s.threadId}> · $${s.total.toFixed(2)} · ${date}`;
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📋 Your Last ${sessions.length} Receipt${sessions.length !== 1 ? 's' : ''}`)
+    .setColor(0x3498db)
+    .setDescription(lines.join('\n'));
+
+  await message.reply({ embeds: [embed] });
+}
+
+async function handleOpenReceipts(message: Message): Promise<void> {
+  if (!message.guildId || !message.guild) {
+    await message.reply('This command is only available in servers.');
+    return;
+  }
+
+  const sessions = manager.getOpenSessionsForUser(message.guildId, message.author.id);
+  if (sessions.length === 0) {
+    await message.reply('You have no open receipts — everything you uploaded is settled. 🎉');
+    return;
+  }
+
+  const MAX = 25;
+  const shown = sessions.slice(0, MAX);
+  const lines = shown.map((s) => {
+    const date = s.createdAt.slice(0, 10);
+    return `🟢 <#${s.threadId}> · $${s.total.toFixed(2)} · ${date}`;
+  });
+  if (sessions.length > MAX) {
+    lines.push(`…and ${sessions.length - MAX} more.`);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🟢 Your Open Receipt${sessions.length !== 1 ? 's' : ''} (${sessions.length})`)
+    .setColor(0x2ecc71)
+    .setDescription(lines.join('\n'));
+
+  await message.reply({ embeds: [embed] });
 }
 
 async function handleSum(message: Message, client: Client, markPaid: boolean): Promise<void> {
@@ -1076,11 +1166,100 @@ async function handleRemoveItem(
   await updateSummaryMessage(message, refreshedSession);
 }
 
+// `split all [- <item#>...] [- <user>...]` — split every currently-unclaimed item
+// evenly among all users on the receipt. Already-claimed/split items are left
+// untouched (this never errors on "already claimed"). Exclusions after a `-`
+// remove item numbers and/or users (by @mention or proxy name) from the split.
+async function handleSplitAll(
+  message: Message,
+  session: ReceiptSession,
+  args: string[],
+): Promise<void> {
+  const proxyByLowerName = new Map<string, string>();
+  for (const id of session.taggedUserIds) {
+    if (isProxyUserId(id)) {
+      proxyByLowerName.set(proxyDisplayName(id).toLowerCase(), id);
+    }
+  }
+
+  const excludedItems = new Set<number>();
+  const excludedUsers = new Set<string>();
+  for (const token of args) {
+    if (token === '-') continue; // list separator, ignorable
+    const mention = token.match(/^<@!?(\d+)>$/);
+    if (mention) {
+      if (mention[1] !== message.client.user!.id) excludedUsers.add(mention[1]);
+      continue;
+    }
+    if (/^\d+$/.test(token)) {
+      excludedItems.add(parseInt(token, 10));
+      continue;
+    }
+    const proxyId = proxyByLowerName.get(token.toLowerCase());
+    if (proxyId) excludedUsers.add(proxyId);
+    // anything else is ignored
+  }
+
+  const participants = session.taggedUserIds.filter((id) => !excludedUsers.has(id));
+  if (participants.length < 2) {
+    await message.reply(
+      'Need at least two users to split between — check your exclusions. `split all` divides among everyone on the receipt.',
+    );
+    return;
+  }
+
+  // Only split items that are currently unclaimed; leave claimed/split items alone.
+  const items = manager.getItems(session.id);
+  const toSplit = items.filter(
+    (item) => !item.claimedByUserId && !excludedItems.has(item.index),
+  );
+  if (toSplit.length === 0) {
+    await message.reply(
+      'No unclaimed items to split — everything is already claimed or excluded.',
+    );
+    return;
+  }
+
+  const succeeded: number[] = [];
+  for (const item of toSplit) {
+    try {
+      manager.splitItem(session.id, item.index, participants);
+      succeeded.push(item.index);
+    } catch {
+      // Skip any item that can't be split rather than failing the whole command.
+    }
+  }
+
+  const displayName = await getDisplayNameResolver(message, session);
+  const names = participants.map((id) => displayName(id)).join(', ');
+  const skipped = items.length - succeeded.length;
+
+  const lines = [
+    `Split ${succeeded.length} unclaimed item${succeeded.length !== 1 ? 's' : ''} evenly between ${names}: ${succeeded.join(', ')}.`,
+  ];
+  if (skipped > 0) {
+    lines.push(
+      `_(${skipped} item${skipped !== 1 ? 's' : ''} left as-is — already claimed or excluded.)_`,
+    );
+  }
+  await message.reply(lines.join('\n'));
+
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
+  await updateSummaryMessage(message, refreshedSession);
+}
+
 async function handleSplit(message: Message, session: ReceiptSession): Promise<void> {
   // Tokenize the original content (with mentions intact) so we can pair
   // each `<@id>` with an optional following `NN%` percentage token.
   const raw = message.content.replace(/^.*?\b(split|s)\b\s*/i, '').trim();
   const tokens = raw.split(/\s+/).filter((t) => t.length > 0);
+
+  // `split all` — split every currently-unclaimed item evenly among all users,
+  // with optional exclusions after `-` (item numbers and/or users).
+  if (tokens[0]?.toLowerCase() === 'all') {
+    await handleSplitAll(message, session, tokens.slice(1));
+    return;
+  }
 
   // Map lowercased proxy names → stored proxy ID, so bare name tokens like
   // "alice" resolve to the `proxy:Alice` user already in the session.
