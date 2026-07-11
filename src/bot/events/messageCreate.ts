@@ -562,7 +562,7 @@ async function handleRecentReceipts(message: Message, cleaned: string): Promise<
 
   const lines = sessions.map((s) => {
     const date = s.createdAt.slice(0, 10);
-    return `${receiptStatusLabel(s.status)} — <#${s.threadId}> · $${s.total.toFixed(2)} · ${date}`;
+    return `${receiptStatusLabel(s.status)} — **${s.restaurantName}** (<#${s.threadId}>) · $${s.total.toFixed(2)} · ${date}`;
   });
 
   const embed = new EmbedBuilder()
@@ -589,7 +589,7 @@ async function handleOpenReceipts(message: Message): Promise<void> {
   const shown = sessions.slice(0, MAX);
   const lines = shown.map((s) => {
     const date = s.createdAt.slice(0, 10);
-    return `🟢 <#${s.threadId}> · $${s.total.toFixed(2)} · ${date}`;
+    return `🟢 **${s.restaurantName}** (<#${s.threadId}>) · $${s.total.toFixed(2)} · ${date}`;
   });
   if (sessions.length > MAX) {
     lines.push(`…and ${sessions.length - MAX} more.`);
