@@ -203,6 +203,13 @@ export function getPersonalStats(
   return store.getPersonalStats(guildId, userId);
 }
 
+export function getRecommendations(
+  guildId: string,
+  limit: number
+): { restaurantName: string; visits: number; lastVisit: string; totalSpend: number }[] {
+  return store.getRestaurantRecommendations(guildId, limit);
+}
+
 export function checkDailyLimit(): void {
   store.checkDailyLimit();
 }
