@@ -203,6 +203,7 @@ export function formatChannelHelp(): string {
     "`@bot leaderboard <today|week|month|year>` — limit to a recent window",
     "`@bot leaderboard from 2026-01-01 to 2026-03-31` — limit to a date range (`to` optional)",
     "`@bot personal leaderboard` — show your own spending stats",
+    "`@bot recommend [n]` — suggest n random places you've eaten before (default 5, max 25)",
     "`@bot addtotal <restaurant> <amount>` — manually log a receipt to the leaderboard",
     "`@bot help` — show this message",
   ].join("\n");

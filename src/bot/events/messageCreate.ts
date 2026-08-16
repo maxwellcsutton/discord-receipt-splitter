@@ -140,6 +140,12 @@ export function registerMessageCreateEvent(client: Client): void {
         return;
       }
 
+      // Recommend command
+      if (content.includes('recommend')) {
+        await handleRecommend(message);
+        return;
+      }
+
       // Recent / open receipts uploaded by the requester.
       // Guard on no image so a new-receipt submission whose caption is a bare
       // number (e.g. a restaurant named "10") isn't swallowed here.
@@ -525,6 +531,43 @@ async function handleAddTotal(message: Message): Promise<void> {
   await message.reply(
     `Added to leaderboard:\n**${restaurantName}** — $${total.toFixed(2)}\n${lines.join('\n')}`,
   );
+}
+
+async function handleRecommend(message: Message): Promise<void> {
+  if (!message.guildId || !message.guild) {
+    await message.reply('This command is only available in servers.');
+    return;
+  }
+
+  const stripped = message.content.replace(/<@!?\d+>/g, ' ');
+  const match = stripped.match(/recommend\b(.*)/is);
+  const rest = (match?.[1] ?? '').trim();
+
+  let limit = 5;
+  if (rest) {
+    const parsed = parseInt(rest, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      limit = Math.min(parsed, 25);
+    }
+  }
+
+  const recommendations = manager.getRecommendations(message.guildId, limit);
+  if (recommendations.length === 0) {
+    await message.reply('No settled receipts yet — I have no history to recommend from.');
+    return;
+  }
+
+  const lines = recommendations.map((r, i) => {
+    const date = r.lastVisit.slice(0, 10);
+    return `${i + 1}. **${r.restaurantName}** — ${r.visits} visit${r.visits !== 1 ? 's' : ''} · $${r.totalSpend.toFixed(2)} · last ${date}`;
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🍽️ ${recommendations.length} Place${recommendations.length !== 1 ? 's' : ''} to Eat`)
+    .setColor(0x2ecc71)
+    .setDescription(lines.join('\n'));
+
+  await message.reply({ embeds: [embed] });
 }
 
 // Human-readable status for a receipt, keyed off session.status.

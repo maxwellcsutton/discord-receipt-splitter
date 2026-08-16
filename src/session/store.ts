@@ -619,6 +619,34 @@ export function getRestaurantLeaderboard(
   };
 }
 
+// --- Recommendations ---
+
+export function getRestaurantRecommendations(
+  guildId: string,
+  limit: number
+): { restaurantName: string; visits: number; lastVisit: string; totalSpend: number }[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT restaurant_name,
+              COUNT(DISTINCT settlement_id) AS visits,
+              MAX(settled_at) AS last_visit,
+              SUM(amount) AS total_spend
+       FROM settlement_entries
+       WHERE guild_id = ?
+       GROUP BY restaurant_name
+       ORDER BY RANDOM()
+       LIMIT ?`
+    )
+    .all(guildId, limit) as any[];
+  return rows.map((r) => ({
+    restaurantName: r.restaurant_name,
+    visits: r.visits,
+    lastVisit: r.last_visit,
+    totalSpend: r.total_spend,
+  }));
+}
+
 // --- Personal leaderboard ---
 
 export interface PersonalStats {

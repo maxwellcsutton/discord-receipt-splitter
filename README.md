@@ -219,6 +219,7 @@ The primary user is whoever posted the receipt. These manage the receipt itself.
 | `@bot leaderboard <today\|week\|month\|year>` | Limit any leaderboard to a recent window (`week` = last 7 days, `month` = last 30, `year` = last 365) |
 | `@bot leaderboard from 2026-01-01 to 2026-03-31` | Limit to an explicit date range (`to` optional; `from`/`since` interchangeable) |
 | `@bot personal leaderboard` | Show your own spending stats (top restaurants, priciest receipts, lifetime spend, rank) |
+| `@bot recommend [n]` | Suggest `n` random places you've eaten before (default 5, max 25) |
 | `@bot addtotal [restaurant] @user1 amount1 @user2 amount2` | Manually log a receipt to the leaderboard |
 | `@bot help` | Show the channel command list |
 
