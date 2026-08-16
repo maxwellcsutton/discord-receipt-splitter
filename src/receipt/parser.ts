@@ -544,37 +544,43 @@ export async function parseReceiptWithReconciliation(
   mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp",
   userHint?: string,
 ): Promise<ReconciledParseResult> {
-  const first = await parseReceiptImage(imageBase64, mediaType, userHint);
-  let parsed = first.parsed;
-  let items = expandLineItems(parsed);
-  let warning = reconciliationWarning(parsed, items);
-  let estimatedCostUsd = first.estimatedCostUsd;
-  let retried = false;
+  let estimatedCostUsd = 0;
+  try {
+    const first = await parseReceiptImage(imageBase64, mediaType, userHint);
+    let parsed = first.parsed;
+    let items = expandLineItems(parsed);
+    let warning = reconciliationWarning(parsed, items);
+    estimatedCostUsd = first.estimatedCostUsd;
+    let retried = false;
 
-  if (warning) {
-    retried = true;
-    const retryHint = buildAlignmentRetryHint(parsed, items, userHint);
-    const retry = await parseReceiptImage(imageBase64, mediaType, retryHint);
-    estimatedCostUsd += retry.estimatedCostUsd;
-    const retryItems = expandLineItems(retry.parsed);
+    if (warning) {
+      retried = true;
+      const retryHint = buildAlignmentRetryHint(parsed, items, userHint);
+      const retry = await parseReceiptImage(imageBase64, mediaType, retryHint);
+      estimatedCostUsd += retry.estimatedCostUsd;
+      const retryItems = expandLineItems(retry.parsed);
 
-    if (
-      reconciliationScore(retry.parsed, retryItems) <
-      reconciliationScore(parsed, items)
-    ) {
-      parsed = retry.parsed;
-      items = retryItems;
+      if (
+        reconciliationScore(retry.parsed, retryItems) <
+        reconciliationScore(parsed, items)
+      ) {
+        parsed = retry.parsed;
+        items = retryItems;
+      }
+      warning = reconciliationWarning(parsed, items);
     }
-    warning = reconciliationWarning(parsed, items);
+
+    const converted = await convertParsedToUsd(parsed, items);
+    return {
+      parsed: converted.parsed,
+      items: converted.items,
+      warning,
+      estimatedCostUsd,
+      retried,
+    };
+  } catch (err) {
+    const wrapped = new Error(err instanceof Error ? err.message : String(err));
+    (wrapped as any).estimatedCostUsd = estimatedCostUsd;
+    throw wrapped;
   }
-
-  const converted = await convertParsedToUsd(parsed, items);
-
-  return {
-    parsed: converted.parsed,
-    items: converted.items,
-    warning,
-    estimatedCostUsd,
-    retried,
-  };
 }

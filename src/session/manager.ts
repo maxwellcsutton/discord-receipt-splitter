@@ -264,25 +264,20 @@ export function checkAllClaimedAndPaid(session: ReceiptSession): {
 
 // --- Roulette ---
 
-const rouletteOptIns = new Map<string, Set<string>>();
-
 export function optIntoRoulette(sessionId: string, userId: string): void {
-  if (!rouletteOptIns.has(sessionId)) {
-    rouletteOptIns.set(sessionId, new Set());
-  }
-  rouletteOptIns.get(sessionId)!.add(userId);
+  store.optIntoRoulette(sessionId, userId);
 }
 
 export function optOutOfRoulette(sessionId: string, userId: string): void {
-  rouletteOptIns.get(sessionId)?.delete(userId);
+  store.optOutOfRoulette(sessionId, userId);
 }
 
 export function getRouletteOptIns(sessionId: string): string[] {
-  return [...(rouletteOptIns.get(sessionId) ?? new Set<string>())];
+  return store.getRouletteOptIns(sessionId);
 }
 
 export function clearRouletteOptIns(sessionId: string): void {
-  rouletteOptIns.delete(sessionId);
+  store.clearRouletteOptIns(sessionId);
 }
 
 export interface RouletteParticipant {

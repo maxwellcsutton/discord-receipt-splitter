@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 
-const rateCache = new Map<string, { rate: number; fetchedAt: number }>();
+const rateCache = new Map<string, { rate: number; date: string | null; fetchedAt: number }>();
 const CACHE_TTL_MS = 1000 * 60 * 60; // 1 hour
 
 export interface ConvertedAmounts {
@@ -55,7 +55,7 @@ export async function getUsdExchangeRate(fromCurrency: string): Promise<{
   const key = cacheKey(code);
   const cached = rateCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return { rate: cached.rate, date: null };
+    return { rate: cached.rate, date: cached.date };
   }
 
   const baseUrl =
@@ -66,10 +66,11 @@ export async function getUsdExchangeRate(fromCurrency: string): Promise<{
     .replace(/\{apikey\}/gi, config.exchangeRateApiKey || "");
 
   const finalUrl = new URL(url);
-  if (!finalUrl.searchParams.has("from") && !baseUrl.includes("{from}")) {
+  const baseLower = baseUrl.toLowerCase();
+  if (!finalUrl.searchParams.has("from") && !baseLower.includes("{from}")) {
     finalUrl.searchParams.set("from", code);
   }
-  if (!finalUrl.searchParams.has("to") && !baseUrl.includes("{to}")) {
+  if (!finalUrl.searchParams.has("to") && !baseLower.includes("{to}")) {
     finalUrl.searchParams.set("to", "USD");
   }
 
@@ -95,8 +96,9 @@ export async function getUsdExchangeRate(fromCurrency: string): Promise<{
     );
   }
 
-  rateCache.set(key, { rate, fetchedAt: Date.now() });
-  return { rate, date: data.date ?? null };
+  const rateDate = data.date ?? null;
+  rateCache.set(key, { rate, date: rateDate, fetchedAt: Date.now() });
+  return { rate, date: rateDate };
 }
 
 export async function convertToUsd(input: {

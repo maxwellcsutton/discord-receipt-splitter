@@ -82,7 +82,7 @@ export function buildUserVenmoButton(
   if (!shouldShowVenmoButton(session, ut.userId, ut.grandTotal, paid, primaryVenmoHandle)) {
     return null;
   }
-  const label = `Pay ${displayName(ut.userId)} $${ut.grandTotal.toFixed(2)}`;
+  const label = `Pay ${displayName(session.primaryUserId)} $${ut.grandTotal.toFixed(2)}`;
   const url = buildVenmoUrl(primaryVenmoHandle, ut.grandTotal, session.restaurantName);
   return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(url);
 }
@@ -304,7 +304,7 @@ export function formatChannelHelp(): string {
     "`@bot personal leaderboard` — show your own spending stats",
     "`@bot recommend [n]` — suggest n random places you've eaten before (default 5, max 25)",
     "`@bot addtotal <restaurant> <amount>` — manually log a receipt to the leaderboard",
-    "`@bot new <location>` — find restaurants near you similar to your group's favorites",
+    "`@bot new <location>` — Yelp restaurants near you, similar to your group's favorites, open for at least 2 more hours",
     "`@bot help` — show this message",
   ].join("\n");
 }

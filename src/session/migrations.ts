@@ -79,6 +79,13 @@ export function initDatabase(): void {
       FOREIGN KEY (session_id) REFERENCES receipt_sessions(id)
     );
 
+    CREATE TABLE IF NOT EXISTS roulette_opt_ins (
+      session_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      PRIMARY KEY (session_id, user_id),
+      FOREIGN KEY (session_id) REFERENCES receipt_sessions(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS restaurant_stats (
       guild_id TEXT NOT NULL,
       restaurant_name TEXT NOT NULL,
@@ -153,7 +160,8 @@ export function initDatabase(): void {
 
   // Backfill: classify earlier movie/spellground receipts as non-food and remove their
   // leaderboard impact. This is a one-time fix for receipts that were settled before
-  // category support existed.
+  // category support existed. We match exact names only to avoid collateral damage to
+  // legitimate restaurants whose names happen to contain these substrings.
   const nonFoodBackfillDone = db
     .prepare("SELECT value FROM meta WHERE key = 'non_food_backfill_v1'")
     .get() as any;
@@ -162,8 +170,7 @@ export function initDatabase(): void {
       const nonFoodSessions = db
         .prepare(
           `SELECT id, restaurant_name FROM receipt_sessions
-           WHERE LOWER(restaurant_name) LIKE '%movie%'
-              OR LOWER(restaurant_name) LIKE '%spellground%'`
+           WHERE LOWER(restaurant_name) IN ('movie', 'spellground')`
         )
         .all() as { id: string; restaurant_name: string }[];
 
@@ -218,7 +225,7 @@ export function initDatabase(): void {
           'UPDATE user_stats SET total_spend = total_spend - ? WHERE guild_id = ? AND user_id = ?'
         ).run(amount, guildId, userId);
         db.prepare(
-          'DELETE FROM user_stats WHERE guild_id = ? AND user_id = ? AND total_spend <= 0'
+          'DELETE FROM user_stats WHERE guild_id = ? AND user_id = ? AND total_spend <= 0.005'
         ).run(guildId, userId);
       }
 
@@ -233,7 +240,7 @@ export function initDatabase(): void {
         ).run(amount, receiptCount, guildId, restaurantName);
         db.prepare(
           `DELETE FROM restaurant_stats
-           WHERE guild_id = ? AND restaurant_name = ? AND (total_spend <= 0 OR receipt_count <= 0)`
+           WHERE guild_id = ? AND restaurant_name = ? AND (total_spend <= 0.005 OR receipt_count <= 0)`
         ).run(guildId, restaurantName);
       }
 
@@ -253,19 +260,6 @@ export function initDatabase(): void {
       ).run(new Date().toISOString());
     });
     tx();
-  }
-
-  // Migration: create user_venmo_handles for existing databases that pre-date it.
-  const venmoCols = db
-    .prepare("PRAGMA table_info(user_venmo_handles)")
-    .all() as { name: string }[];
-  if (venmoCols.length === 0) {
-    db.exec(`
-      CREATE TABLE user_venmo_handles (
-        user_id TEXT PRIMARY KEY,
-        handle TEXT NOT NULL
-      )
-    `);
   }
 
   // Migration: add currency columns to receipt_sessions for foreign-currency support.

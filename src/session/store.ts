@@ -921,6 +921,36 @@ export function backfillSettlementEntries(): void {
   tx();
 }
 
+// --- Roulette opt-ins ---
+
+export function getRouletteOptIns(sessionId: string): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT user_id FROM roulette_opt_ins WHERE session_id = ?")
+    .all(sessionId) as any[];
+  return rows.map((r) => r.user_id);
+}
+
+export function optIntoRoulette(sessionId: string, userId: string): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO roulette_opt_ins (session_id, user_id) VALUES (?, ?)
+    ON CONFLICT(session_id, user_id) DO NOTHING
+  `).run(sessionId, userId);
+}
+
+export function optOutOfRoulette(sessionId: string, userId: string): void {
+  const db = getDb();
+  db.prepare(
+    "DELETE FROM roulette_opt_ins WHERE session_id = ? AND user_id = ?"
+  ).run(sessionId, userId);
+}
+
+export function clearRouletteOptIns(sessionId: string): void {
+  const db = getDb();
+  db.prepare("DELETE FROM roulette_opt_ins WHERE session_id = ?").run(sessionId);
+}
+
 // --- API spend limit ---
 
 export function getDailyApiCost(date: string): number {

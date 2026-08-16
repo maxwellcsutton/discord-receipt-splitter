@@ -82,11 +82,12 @@ DATABASE_PATH=./data/receipts.db
 |----------|----------|---------|-------------|
 | `DISCORD_TOKEN` | **Yes** | — | Discord bot token |
 | `ANTHROPIC_API_KEY` | **Yes** | — | Anthropic API key |
+| `YELP_API_KEY` | No | — | Yelp Fusion API key (required for the `new` command) — see [docs/yelp-api-key.md](docs/yelp-api-key.md) |
 | `CLAUDE_MODEL` | No | `sonnet` | Model alias (`haiku` \| `sonnet` \| `opus`) or a full model id — see [Model Selection](#model-selection) |
 | `DATABASE_PATH` | No | `./data/receipts.db` | SQLite database file path |
 | `MODIFIER_PREFIXES` | No | `add ,extra ,w/ ,with ` | Comma-separated prefixes that mark a line as a modifier/add-on to roll into its parent item |
 | `DAILY_SPEND_LIMIT_USD` | No | `0.10` | Max estimated Anthropic spend per UTC day before scans are blocked |
-| `VENMO_ENABLED` | No | `false` | Enable "Pay with Venmo" buttons on receipt summaries (users must also set a Venmo handle) |
+| `VENMO_ENABLED` | No | `false` | Enable "Pay with Venmo" buttons on receipt summaries (the receipt poster must set a Venmo handle; everyone else gets a button to pay them) |
 | `EXCHANGE_RATE_API_URL` | No | `https://api.frankfurter.app/latest` | Exchange-rate service URL. Use `{from}`, `{to}`, and `{apikey}` placeholders if needed |
 | `EXCHANGE_RATE_API_KEY` | No | — | API key for the exchange-rate service, if required by your chosen provider |
 | `PORT` | No | `3000` | Port for the health-check HTTP server (used by hosting platforms) |
@@ -202,7 +203,7 @@ Aliases are shown after the `/`. In a thread, the bot reads every reply; in a ch
 | `unclaim 1 3` / `uc 1 3` | Release claimed items |
 | `split 3 5 @user1 @user2` / `s ...` | Split item(s) between mentioned users (even, or `@user 30%` for uneven; proxy names allowed) |
 | `split all` / `s all` | Split every **unclaimed** item evenly among everyone on the receipt (claimed items are left untouched — never errors on them). Exclude items and/or users after `-`: `split all - 3 5 - @alice` |
-| `venmo <handle>` / `v <handle>` | Set your Venmo handle so the receipt summary shows a **Pay with Venmo** button for your share. Omit handle to see current; `venmo remove` to clear |
+| `venmo <handle>` / `v <handle>` | Set the receipt poster's Venmo handle so each debtor's summary shows a **Pay with Venmo** button that pays the poster. Omit handle to see current; `venmo remove` to clear |
 | `roulette join` / `rj` | Opt in to the roulette pool |
 | `roulette leave` / `rl` | Leave the roulette pool |
 | `roulette spin` / `rs` | Run the roulette (opted-in users or primary user only) |
@@ -250,7 +251,7 @@ The primary user is whoever posted the receipt. These manage the receipt itself.
 | `@bot personal leaderboard` | Show your own spending stats (top restaurants, priciest receipts, lifetime spend, rank) |
 | `@bot recommend [n]` | Suggest `n` random places you've eaten before (default 5, max 25) |
 | `@bot addtotal [restaurant] @user1 amount1 @user2 amount2` | Manually log a receipt to the leaderboard |
-| `@bot new <location>` | Find restaurants near you similar to your group's favorites (e.g. `@bot new Austin, TX`) |
+| `@bot new <location>` | Yelp restaurants near you, similar to your group's favorites, that are open for at least 2 more hours (e.g. `@bot new Austin, TX`) |
 | `@bot help` | Show the channel command list |
 
 > **Combining leaderboard filters:** the restaurant and date filters compose — e.g. `@bot leaderboard TK month` or `@bot leaderboard Sakura from 2026-01-01`. Date-filtered leaderboards are computed from per-receipt settlement history, so any receipts settled before that history was tracked (older manual `addtotal` entries) only appear in the unfiltered all-time view.

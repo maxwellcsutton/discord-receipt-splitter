@@ -15,10 +15,10 @@ import {
 } from 'discord.js';
 import { randomUUID } from 'crypto';
 import { config } from '../../config.js';
+import { findSimilarRestaurants } from '../../receipt/recommend.js';
 import {
   parseReceiptWithReconciliation,
 } from '../../receipt/parser.js';
-import { findSimilarRestaurants } from '../../receipt/recommend.js';
 import {
   buildSummaryEmbeds,
   buildUserEmbed,
@@ -163,8 +163,8 @@ export function registerMessageCreateEvent(client: Client): void {
         return;
       }
 
-      // Recommend command
-      if (content.includes('recommend')) {
+      // Recommend command (must not swallow receipt images)
+      if (!hasImage && content.includes('recommend')) {
         await handleRecommend(message);
         return;
       }
@@ -455,14 +455,38 @@ async function handleNewRestaurantSuggestions(message: Message): Promise<void> {
     return;
   }
 
+  if (!config.yelpApiKey) {
+    await message.reply(
+      'This command requires a Yelp Fusion API key. Add `YELP_API_KEY` to your `.env` file.',
+    );
+    return;
+  }
+
   manager.checkDailyLimit();
 
-  const result = await findSimilarRestaurants(
-    favorites.map((f) => ({ name: f.restaurantName, receiptCount: f.receiptCount })),
-    location,
-    5,
-  );
+  let result;
+  try {
+    result = await findSimilarRestaurants(
+      favorites.map((f) => ({ name: f.restaurantName, receiptCount: f.receiptCount })),
+      location,
+      5,
+    );
+  } catch (err) {
+    const cost = (err as any).estimatedCostUsd;
+    if (typeof cost === "number") manager.logApiCost(cost);
+    await message.reply(
+      `⚠️ Couldn't fetch restaurant suggestions: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return;
+  }
   manager.logApiCost(result.estimatedCostUsd);
+
+  if (result.restaurants.length === 0) {
+    await message.reply(
+      `I couldn't find any Yelp restaurants near **${location}** that match your group's tastes and are open for at least 2 more hours.`,
+    );
+    return;
+  }
 
   const basis = favorites
     .slice(0, 5)
@@ -472,7 +496,8 @@ async function handleNewRestaurantSuggestions(message: Message): Promise<void> {
   const embed = new EmbedBuilder()
     .setTitle(`🍽️ New restaurant ideas near ${location}`)
     .setColor(0x2ecc71)
-    .setDescription(`Based on your group's favorites: ${basis}`);
+    .setDescription(`Based on your group's favorites: ${basis}`)
+    .setFooter({ text: 'Showing places expected to be open at least 2 hours from now.' });
 
   for (const r of result.restaurants) {
     embed.addFields({
@@ -796,6 +821,7 @@ async function handleSum(message: Message, client: Client, markPaid: boolean): P
         const { allPaid } = manager.checkAllClaimedAndPaid(refreshedSession);
         if (allPaid) {
           const primaryName = displayName(session.primaryUserId);
+          manager.clearRouletteOptIns(session.id);
           manager.recordSettlement(session.guildId, session.restaurantName, userTotals, session.id);
           await thread.send(
             `🎉 **${primaryName}** — All payments for **${session.restaurantName}** have been received!`,
@@ -869,6 +895,8 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
   try {
     result = await parseReceiptWithReconciliation(imageBase64, mediaType);
   } catch (err) {
+    const cost = (err as any).estimatedCostUsd;
+    if (typeof cost === "number") manager.logApiCost(cost);
     await message.reactions.removeAll().catch(() => {});
     const reason = err instanceof Error ? err.message : String(err);
     await message.reply(
@@ -1701,6 +1729,8 @@ async function handleRescan(
   try {
     result = await parseReceiptWithReconciliation(imageBase64, mediaType, hint || undefined);
   } catch (err) {
+    const cost = (err as any).estimatedCostUsd;
+    if (typeof cost === "number") manager.logApiCost(cost);
     await message.reactions.removeAll().catch(() => {});
     const reason = err instanceof Error ? err.message : String(err);
     await message.reply(
@@ -1732,9 +1762,12 @@ async function handleRescan(
     originalTotal: parsed.originalTotal,
   });
 
+  // A rescan resets claims/splits/payments; opt-ins must be re-confirmed too.
+  manager.clearRouletteOptIns(session.id);
+
   await message.reactions.removeAll().catch(() => {});
   await message.reply(
-    `🔄 Receipt re-scanned${hint ? ` with hint: _${hint}_` : ''}. All previous claims, splits, and payment statuses were reset. Please double-check the values below.`,
+    `🔄 Receipt re-scanned${hint ? ` with hint: _${hint}_` : ''}. All previous claims, splits, payment statuses, and roulette opt-ins were reset. Please double-check the values below.`,
   );
 
   if (warning) {
@@ -1752,6 +1785,7 @@ async function handleVoid(message: Message, session: ReceiptSession): Promise<vo
   }
 
   manager.voidSession(session.id);
+  manager.clearRouletteOptIns(session.id);
 
   await message.reply('🚫 Receipt voided. No further commands will be accepted on this thread.');
 
@@ -2151,6 +2185,7 @@ async function checkAndNotify(message: Message, session: ReceiptSession): Promis
     const primaryName = displayName(session.primaryUserId);
 
     const userTotals = manager.getUserTotals(session);
+    manager.clearRouletteOptIns(session.id);
     manager.recordSettlement(session.guildId, session.restaurantName, userTotals, session.id);
 
     await thread.send(

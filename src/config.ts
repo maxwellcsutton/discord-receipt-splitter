@@ -31,6 +31,7 @@ const DEFAULT_DAILY_SPEND_LIMIT_USD = 0.1;
 export const config = {
   discordToken: required("DISCORD_TOKEN"),
   anthropicApiKey: required("ANTHROPIC_API_KEY"),
+  yelpApiKey: process.env.YELP_API_KEY || "",
   databasePath: process.env.DATABASE_PATH || "./data/receipts.db",
   modifierPrefixes: (process.env.MODIFIER_PREFIXES ?? DEFAULT_MODIFIER_PREFIXES)
     .split(",")
