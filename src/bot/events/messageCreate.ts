@@ -1118,6 +1118,40 @@ async function handleThreadMessage(message: Message, client: Client): Promise<vo
   }
 
   if (
+    contentClean === 'roulette join' ||
+    contentClean === 'rj' ||
+    contentClean === 'roulette opt in' ||
+    contentClean === 'roi'
+  ) {
+    await handleRouletteJoin(message, session, effectiveUserId);
+    return;
+  }
+
+  if (
+    contentClean === 'roulette leave' ||
+    contentClean === 'rl' ||
+    contentClean === 'roulette opt out' ||
+    contentClean === 'roo'
+  ) {
+    await handleRouletteLeave(message, session, effectiveUserId);
+    return;
+  }
+
+  if (contentClean === 'roulette spin' || contentClean === 'rs') {
+    await handleRouletteSpin(message, session);
+    return;
+  }
+
+  if (
+    contentClean === 'roulette' ||
+    contentClean === 'roulette status' ||
+    contentClean === 'rst'
+  ) {
+    await handleRouletteStatus(message, session);
+    return;
+  }
+
+  if (
     contentClean.startsWith('claim ') ||
     contentClean === 'claim' ||
     contentClean.startsWith('c ') ||
@@ -1992,6 +2026,90 @@ async function handlePaid(message: Message, session: ReceiptSession, targetUserI
     } catch {
       // ignore — bot may lack permission or user already left
     }
+  }
+}
+
+async function handleRouletteJoin(
+  message: Message,
+  session: ReceiptSession,
+  targetUserId: string,
+): Promise<void> {
+  const items = manager.getItems(session.id);
+  const splits = manager.getSplits(session.id);
+  const hasClaimed =
+    items.some((i) => i.claimedByUserId === targetUserId) ||
+    splits.some((s) => s.userId === targetUserId);
+
+  if (!hasClaimed) {
+    await message.reply('You can only opt in to the roulette if you have claimed at least one item.');
+    return;
+  }
+
+  manager.optIntoRoulette(session.id, targetUserId);
+  const displayName = await getDisplayNameResolver(message, session);
+  await message.reply(`${displayName(targetUserId)} joined the roulette. 🎰`);
+}
+
+async function handleRouletteLeave(
+  message: Message,
+  session: ReceiptSession,
+  targetUserId: string,
+): Promise<void> {
+  manager.optOutOfRoulette(session.id, targetUserId);
+  const displayName = await getDisplayNameResolver(message, session);
+  await message.reply(`${displayName(targetUserId)} left the roulette.`);
+}
+
+async function handleRouletteStatus(message: Message, session: ReceiptSession): Promise<void> {
+  const optIns = manager.getRouletteOptIns(session.id);
+  const displayName = await getDisplayNameResolver(message, session);
+
+  if (optIns.length === 0) {
+    await message.reply(
+      'No one has opted in to the roulette. Reply `roulette join` to enter the pool.',
+    );
+    return;
+  }
+
+  const names = optIns.map((id) => displayName(id)).join(', ');
+  await message.reply(
+    `Roulette opt-ins (${optIns.length}): ${names}\nReply \`roulette spin\` to run the roulette.`,
+  );
+}
+
+async function handleRouletteSpin(message: Message, session: ReceiptSession): Promise<void> {
+  const optIns = manager.getRouletteOptIns(session.id);
+  const canSpin =
+    optIns.includes(message.author.id) || message.author.id === session.primaryUserId;
+
+  if (!canSpin) {
+    await message.reply('Only opted-in users or the primary user can spin the roulette.');
+    return;
+  }
+
+  try {
+    const result = manager.runRoulette(session);
+    const displayName = await getDisplayNameResolver(message, session);
+
+    const participantLines = result.participants.map(
+      (p) =>
+        `  ${displayName(p.userId)} — $${p.grandTotal.toFixed(2)} (${(p.weight * 100).toFixed(1)}%)`,
+    );
+
+    await message.reply([
+      '🎰 **Roulette result**',
+      `Pool: $${result.poolTotal.toFixed(2)} across ${result.affectedItemCount} item${result.affectedItemCount !== 1 ? 's' : ''}`,
+      'Odds:',
+      ...participantLines,
+      '',
+      `🏆 **Winner: ${displayName(result.winnerUserId)}** pays the entire $${result.poolTotal.toFixed(2)} bill!`,
+    ].join('\n'));
+
+    const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
+    await updateSummaryMessage(message, refreshedSession);
+    await checkAndNotify(message, refreshedSession);
+  } catch (err) {
+    await message.reply(err instanceof Error ? err.message : 'Roulette failed.');
   }
 }
 

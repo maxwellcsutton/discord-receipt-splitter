@@ -280,7 +280,7 @@ export function getSplitItems(sessionId: string): SplitEntry[] {
 
 // --- Payments ---
 
-function ensureUserPayment(sessionId: string, userId: string): void {
+export function ensureUserPayment(sessionId: string, userId: string): void {
   const db = getDb();
   // Insert if not present; if already present and marked paid, reset to unpaid
   // so the user must pay again after claiming additional items.
@@ -288,6 +288,37 @@ function ensureUserPayment(sessionId: string, userId: string): void {
     INSERT INTO user_payments (session_id, user_id, paid) VALUES (?, ?, 0)
     ON CONFLICT(session_id, user_id) DO UPDATE SET paid = 0 WHERE paid = 1
   `).run(sessionId, userId);
+}
+
+export function reassignItemsToUser(
+  sessionId: string,
+  itemIndices: number[],
+  userId: string,
+): void {
+  const db = getDb();
+  const updateItem = db.prepare(
+    "UPDATE line_items SET claimed_by_user_id = ? WHERE session_id = ? AND item_index = ?"
+  );
+  const deleteSplit = db.prepare(
+    "DELETE FROM split_items WHERE session_id = ? AND line_item_index = ?"
+  );
+  const tx = db.transaction(() => {
+    for (const idx of itemIndices) {
+      updateItem.run(userId, sessionId, idx);
+      deleteSplit.run(sessionId, idx);
+    }
+    ensureUserPayment(sessionId, userId);
+  });
+  tx();
+}
+
+export function removeUserPayments(sessionId: string, userIds: string[]): void {
+  if (userIds.length === 0) return;
+  const db = getDb();
+  const placeholders = userIds.map(() => '?').join(',');
+  db.prepare(
+    `DELETE FROM user_payments WHERE session_id = ? AND user_id IN (${placeholders})`
+  ).run(sessionId, ...userIds);
 }
 
 export function markPaid(sessionId: string, userId: string): void {

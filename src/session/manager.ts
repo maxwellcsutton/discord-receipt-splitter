@@ -261,3 +261,135 @@ export function checkAllClaimedAndPaid(session: ReceiptSession): {
 
   return { allClaimed, allPaid };
 }
+
+// --- Roulette ---
+
+const rouletteOptIns = new Map<string, Set<string>>();
+
+export function optIntoRoulette(sessionId: string, userId: string): void {
+  if (!rouletteOptIns.has(sessionId)) {
+    rouletteOptIns.set(sessionId, new Set());
+  }
+  rouletteOptIns.get(sessionId)!.add(userId);
+}
+
+export function optOutOfRoulette(sessionId: string, userId: string): void {
+  rouletteOptIns.get(sessionId)?.delete(userId);
+}
+
+export function getRouletteOptIns(sessionId: string): string[] {
+  return [...(rouletteOptIns.get(sessionId) ?? new Set<string>())];
+}
+
+export function clearRouletteOptIns(sessionId: string): void {
+  rouletteOptIns.delete(sessionId);
+}
+
+export interface RouletteParticipant {
+  userId: string;
+  grandTotal: number;
+  weight: number;
+}
+
+export interface RouletteResult {
+  winnerUserId: string;
+  poolTotal: number;
+  participants: RouletteParticipant[];
+  affectedItemCount: number;
+}
+
+export function runRoulette(session: ReceiptSession): RouletteResult {
+  const optIns = getRouletteOptIns(session.id);
+  if (optIns.length < 2) {
+    throw new Error("At least 2 users must opt in to spin the roulette.");
+  }
+
+  const items = store.getLineItems(session.id);
+  const splits = store.getSplitItems(session.id);
+
+  const splitMap = new Map<number, SplitEntry[]>();
+  for (const s of splits) {
+    if (!splitMap.has(s.lineItemIndex)) {
+      splitMap.set(s.lineItemIndex, []);
+    }
+    splitMap.get(s.lineItemIndex)!.push(s);
+  }
+
+  // Reject mixed opt-in/opt-out splits — we can't cleanly move only a portion
+  // of an item to the winner without re-splitting.
+  for (const [idx, itemSplits] of splitMap) {
+    const hasOptedIn = itemSplits.some((s) => optIns.includes(s.userId));
+    const hasNonOptedIn = itemSplits.some((s) => !optIns.includes(s.userId));
+    if (hasOptedIn && hasNonOptedIn) {
+      throw new Error(
+        `Item ${idx} is split between opted-in and opted-out users. Unsplit it or have all participants opt in.`
+      );
+    }
+  }
+
+  // Items claimed by opted-in users (including fully opted-in splits).
+  const affectedItems = items.filter((item) => {
+    if (item.claimedByUserId && optIns.includes(item.claimedByUserId)) {
+      return true;
+    }
+    const itemSplits = splitMap.get(item.index);
+    return itemSplits?.some((s) => optIns.includes(s.userId)) ?? false;
+  });
+
+  if (affectedItems.length === 0) {
+    throw new Error("Opted-in users have no claimed items to put in the pool.");
+  }
+
+  const userTotals = calculateUserTotals(session, items, splits);
+  const participants = userTotals
+    .filter((u) => optIns.includes(u.userId))
+    .map((u) => ({
+      userId: u.userId,
+      grandTotal: u.grandTotal,
+      weight: 0,
+    }));
+
+  if (participants.length < 2) {
+    throw new Error("At least 2 opted-in users must have claimed items to spin.");
+  }
+
+  const poolTotal = participants.reduce((sum, p) => sum + p.grandTotal, 0);
+  for (const p of participants) {
+    p.weight = poolTotal > 0 ? p.grandTotal / poolTotal : 1 / participants.length;
+  }
+
+  // Weighted random selection.
+  const rand = Math.random();
+  let cumulative = 0;
+  let winnerUserId = participants[0].userId;
+  for (const p of participants) {
+    cumulative += p.weight;
+    if (rand <= cumulative) {
+      winnerUserId = p.userId;
+      break;
+    }
+  }
+
+  // Move all affected items to the winner as sole owner.
+  store.reassignItemsToUser(
+    session.id,
+    affectedItems.map((i) => i.index),
+    winnerUserId
+  );
+
+  // Remove payment entries for opted-in users who didn't win.
+  const nonWinners = optIns.filter((id) => id !== winnerUserId);
+  store.removeUserPayments(session.id, nonWinners);
+
+  // Ensure winner is tracked as unpaid for the new total.
+  store.ensureUserPayment(session.id, winnerUserId);
+
+  clearRouletteOptIns(session.id);
+
+  return {
+    winnerUserId,
+    poolTotal,
+    participants,
+    affectedItemCount: affectedItems.length,
+  };
+}
