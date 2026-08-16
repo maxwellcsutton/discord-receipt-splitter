@@ -5,6 +5,7 @@ A Discord bot that splits restaurant receipts among users. Post a receipt photo,
 ## Features
 
 - **AI-powered receipt reading** — Claude Vision extracts line items, per-unit prices, tax, tip, and totals from receipt photos
+- **Foreign languages & currencies** — reads receipts in any language/script and converts foreign currencies to USD automatically (exchange-rate service configurable)
 - **Skew-aware parsing** — handles photos taken at an angle, with automatic self-correction when line items don't reconcile to the subtotal (see [Prompting & Accuracy](#prompting--accuracy))
 - **Configurable model** — choose `haiku`, `sonnet`, or `opus` per your accuracy/cost needs
 - **Item claiming** — claim items by number with ranges (`claim 1-3 5`)
@@ -14,6 +15,7 @@ A Discord bot that splits restaurant receipts among users. Post a receipt photo,
 - **Proxy users** — add placeholders for people who aren't in Discord
 - **Payment tracking** — users mark themselves paid; the bot notifies when all payments are in
 - **Leaderboard** — track top restaurants and spenders across receipts, filter by a single restaurant or a date range/window, plus per-user personal stats. Proxy users are tracked too, and merge across receipts by name
+- **Food / non-food categories** — receipts default to food and count toward leaderboards; the primary user can mark a receipt as non-food so it is excluded
 - **Concurrent receipts** — each receipt gets its own Discord thread
 - **Persistent storage** — SQLite database survives restarts
 - **Daily spend cap** — a built-in API-cost limit guards against runaway spend
@@ -83,6 +85,9 @@ DATABASE_PATH=./data/receipts.db
 | `DATABASE_PATH` | No | `./data/receipts.db` | SQLite database file path |
 | `MODIFIER_PREFIXES` | No | `add ,extra ,w/ ,with ` | Comma-separated prefixes that mark a line as a modifier/add-on to roll into its parent item |
 | `DAILY_SPEND_LIMIT_USD` | No | `0.10` | Max estimated Anthropic spend per UTC day before scans are blocked |
+| `VENMO_ENABLED` | No | `false` | Enable "Pay with Venmo" buttons on receipt summaries (users must also set a Venmo handle) |
+| `EXCHANGE_RATE_API_URL` | No | `https://api.frankfurter.app/latest` | Exchange-rate service URL. Use `{from}`, `{to}`, and `{apikey}` placeholders if needed |
+| `EXCHANGE_RATE_API_KEY` | No | — | API key for the exchange-rate service, if required by your chosen provider |
 | `PORT` | No | `3000` | Port for the health-check HTTP server (used by hosting platforms) |
 
 > **Daily spend cap:** the bot blocks new scans once estimated Anthropic spend reaches `DAILY_SPEND_LIMIT_USD` for the current UTC day (resets at midnight UTC) as a safety guard. The `0.10` default is only a handful of receipts per day on `sonnet`/`opus` — raise it to match your expected volume.
@@ -180,6 +185,7 @@ Aliases are shown after the `/`. In a thread, the bot reads every reply; in a ch
 | `unclaim 1 3` / `uc 1 3` | Release claimed items |
 | `split 3 5 @user1 @user2` / `s ...` | Split item(s) between mentioned users (even, or `@user 30%` for uneven; proxy names allowed) |
 | `split all` / `s all` | Split every **unclaimed** item evenly among everyone on the receipt (claimed items are left untouched — never errors on them). Exclude items and/or users after `-`: `split all - 3 5 - @alice` |
+| `venmo <handle>` / `v <handle>` | Set your Venmo handle so the receipt summary shows a **Pay with Venmo** button for your share. Omit handle to see current; `venmo remove` to clear |
 | `paid` / `p` | Mark yourself as paid |
 | `unpaid` / `up` | Mark yourself as unpaid |
 | `status` / `st` | Show current claim status |
@@ -202,6 +208,8 @@ The primary user is whoever posted the receipt. These manage the receipt itself.
 | `adduser @user` / `au @user` | Add a user to the receipt |
 | `addproxy Alice` / `ap Alice` | Add a placeholder for someone not in Discord |
 | `rescan <optional hint>` | Re-parse the receipt image (resets all claims/splits/payments) — see [Prompting & Accuracy](#prompting--accuracy) |
+| `nonfood` / `nf` | Mark this receipt as non-food so it won't count on leaderboards |
+| `food` | Mark this receipt as food so it counts on leaderboards (default) |
 | `void` | Void the receipt and lock the thread |
 
 > **Acting on behalf of others:** the primary user can append `@user` to most commands (e.g. `claim 3 @alice`) or `as <proxyname>` to act for a proxy user.
@@ -220,6 +228,7 @@ The primary user is whoever posted the receipt. These manage the receipt itself.
 | `@bot leaderboard from 2026-01-01 to 2026-03-31` | Limit to an explicit date range (`to` optional; `from`/`since` interchangeable) |
 | `@bot personal leaderboard` | Show your own spending stats (top restaurants, priciest receipts, lifetime spend, rank) |
 | `@bot addtotal [restaurant] @user1 amount1 @user2 amount2` | Manually log a receipt to the leaderboard |
+| `@bot new <location>` | Find restaurants near you similar to your group's favorites (e.g. `@bot new Austin, TX`) |
 | `@bot help` | Show the channel command list |
 
 > **Combining leaderboard filters:** the restaurant and date filters compose — e.g. `@bot leaderboard TK month` or `@bot leaderboard Sakura from 2026-01-01`. Date-filtered leaderboards are computed from per-receipt settlement history, so any receipts settled before that history was tracked (older manual `addtotal` entries) only appear in the unfiltered all-time view.
@@ -310,6 +319,7 @@ src/
       ready.ts          — Bot ready event
   receipt/
     parser.ts           — Claude Vision extraction, model selection, reconciliation
+    recommend.ts        — AI-powered restaurant recommendations based on group history
     formatter.ts        — Discord embed/message formatting + help text
     calculator.ts       — Proportional tax/tip math
     types.ts            — TypeScript interfaces

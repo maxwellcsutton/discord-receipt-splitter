@@ -6,6 +6,7 @@ import {
   LineItem,
   SplitEntry,
   SessionStatus,
+  ReceiptCategory,
 } from "../receipt/types.js";
 import { calculateUserTotals } from "../receipt/calculator.js";
 
@@ -15,9 +16,10 @@ export function createSession(session: ReceiptSession, items: LineItem[]): void 
   const db = getDb();
   const insertSession = db.prepare(`
     INSERT INTO receipt_sessions (id, thread_id, original_message_id, channel_id, guild_id,
-      primary_user_id, restaurant_name, subtotal, discount_amount, tax_amount, tip_amount, total, status,
-      summary_message_id, tagged_user_ids, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      primary_user_id, restaurant_name, subtotal, discount_amount, tax_amount, tip_amount, total,
+      currency_code, rate_to_usd, rate_date, original_subtotal, original_discount, original_tax,
+      original_tip, original_total, status, category, summary_message_id, tagged_user_ids, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertItem = db.prepare(`
     INSERT INTO line_items (session_id, item_index, name, unit_price, original_quantity, claimed_by_user_id)
@@ -38,7 +40,16 @@ export function createSession(session: ReceiptSession, items: LineItem[]): void 
       session.taxAmount,
       session.tipAmount,
       session.total,
+      session.currencyCode,
+      session.rateToUsd,
+      session.rateDate,
+      session.originalSubtotal,
+      session.originalDiscount,
+      session.originalTax,
+      session.originalTip,
+      session.originalTotal,
       session.status,
+      session.category,
       session.summaryMessageId,
       JSON.stringify(session.taggedUserIds),
       session.createdAt
@@ -303,6 +314,29 @@ export function getUserPayments(
   return rows.map((r) => ({ userId: r.user_id, paid: !!r.paid }));
 }
 
+// --- Venmo handles ---
+
+export function getUserVenmoHandle(userId: string): string | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT handle FROM user_venmo_handles WHERE user_id = ?")
+    .get(userId) as any;
+  return row?.handle ?? null;
+}
+
+export function setUserVenmoHandle(userId: string, handle: string | null): void {
+  const db = getDb();
+  if (handle === null) {
+    db.prepare("DELETE FROM user_venmo_handles WHERE user_id = ?").run(userId);
+    return;
+  }
+  db.prepare(`
+    INSERT INTO user_venmo_handles (user_id, handle)
+    VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET handle = excluded.handle
+  `).run(userId, handle);
+}
+
 // --- Status ---
 
 export function updateSessionStatus(
@@ -312,6 +346,17 @@ export function updateSessionStatus(
   const db = getDb();
   db.prepare("UPDATE receipt_sessions SET status = ? WHERE id = ?").run(
     status,
+    sessionId
+  );
+}
+
+export function updateSessionCategory(
+  sessionId: string,
+  category: ReceiptCategory
+): void {
+  const db = getDb();
+  db.prepare("UPDATE receipt_sessions SET category = ? WHERE id = ?").run(
+    category,
     sessionId
   );
 }
@@ -374,6 +419,14 @@ export function replaceSessionItems(
     taxAmount: number;
     tipAmount: number | null;
     total: number;
+    currencyCode?: string;
+    rateToUsd?: number;
+    rateDate?: string | null;
+    originalSubtotal?: number;
+    originalDiscount?: number;
+    originalTax?: number;
+    originalTip?: number | null;
+    originalTotal?: number;
   },
 ): void {
   const db = getDb();
@@ -396,13 +449,26 @@ export function replaceSessionItems(
     }
 
     db.prepare(
-      "UPDATE receipt_sessions SET subtotal = ?, discount_amount = ?, tax_amount = ?, tip_amount = ?, total = ?, status = 'active' WHERE id = ?",
+      `UPDATE receipt_sessions SET
+        subtotal = ?, discount_amount = ?, tax_amount = ?, tip_amount = ?, total = ?,
+        currency_code = ?, rate_to_usd = ?, rate_date = ?,
+        original_subtotal = ?, original_discount = ?, original_tax = ?, original_tip = ?, original_total = ?,
+        status = 'active'
+       WHERE id = ?`,
     ).run(
       totals.subtotal,
       totals.discountAmount,
       totals.taxAmount,
       totals.tipAmount,
       totals.total,
+      totals.currencyCode ?? "USD",
+      totals.rateToUsd ?? 1,
+      totals.rateDate ?? null,
+      totals.originalSubtotal ?? totals.subtotal,
+      totals.originalDiscount ?? totals.discountAmount,
+      totals.originalTax ?? totals.taxAmount,
+      totals.originalTip ?? totals.tipAmount,
+      totals.originalTotal ?? totals.total,
       sessionId,
     );
   });
@@ -418,6 +484,16 @@ export function recordSettlement(
   sessionId?: string | null
 ): void {
   const db = getDb();
+
+  // Non-food receipts are tracked in the session but do not count on leaderboards.
+  if (sessionId) {
+    const sessionRow = db
+      .prepare("SELECT category FROM receipt_sessions WHERE id = ?")
+      .get(sessionId) as any;
+    if (sessionRow?.category === "non_food") {
+      return;
+    }
+  }
 
   const upsertRestaurant = db.prepare(`
     INSERT INTO restaurant_stats (guild_id, restaurant_name, total_spend, receipt_count)
@@ -471,6 +547,23 @@ export function getTopRestaurants(
   const rows = db
     .prepare(
       "SELECT restaurant_name, total_spend, receipt_count FROM restaurant_stats WHERE guild_id = ? ORDER BY total_spend DESC LIMIT ?"
+    )
+    .all(guildId, limit) as any[];
+  return rows.map((r) => ({
+    restaurantName: r.restaurant_name,
+    totalSpend: r.total_spend,
+    receiptCount: r.receipt_count,
+  }));
+}
+
+export function getMostFrequentRestaurants(
+  guildId: string,
+  limit = 10
+): { restaurantName: string; totalSpend: number; receiptCount: number }[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      "SELECT restaurant_name, total_spend, receipt_count FROM restaurant_stats WHERE guild_id = ? ORDER BY receipt_count DESC LIMIT ?"
     )
     .all(guildId, limit) as any[];
   return rows.map((r) => ({
@@ -731,7 +824,7 @@ export function backfillSettlementEntries(): void {
   if (done) return;
 
   const sessions = db
-    .prepare("SELECT * FROM receipt_sessions WHERE status = 'settled'")
+    .prepare("SELECT * FROM receipt_sessions WHERE status = 'settled' AND category = 'food'")
     .all() as any[];
 
   const insertEntry = db.prepare(`
@@ -850,6 +943,15 @@ export function getUnpaidSessionsForUser(
 // --- Helpers ---
 
 function rowToSession(row: any): ReceiptSession {
+  const currencyCode = row.currency_code ?? "USD";
+  const rateToUsd = row.rate_to_usd ?? 1;
+  // Fallback for pre-currency rows: original amounts default to the USD amounts.
+  const originalSubtotal = row.original_subtotal ?? row.subtotal;
+  const originalDiscount = row.original_discount ?? row.discount_amount;
+  const originalTax = row.original_tax ?? row.tax_amount;
+  const originalTip = row.original_tip ?? row.tip_amount;
+  const originalTotal = row.original_total ?? row.total;
+
   return {
     id: row.id,
     threadId: row.thread_id,
@@ -863,7 +965,16 @@ function rowToSession(row: any): ReceiptSession {
     taxAmount: row.tax_amount,
     tipAmount: row.tip_amount,
     total: row.total,
+    currencyCode,
+    rateToUsd,
+    rateDate: row.rate_date ?? null,
+    originalSubtotal,
+    originalDiscount,
+    originalTax,
+    originalTip,
+    originalTotal,
     status: row.status as SessionStatus,
+    category: (row.category as ReceiptCategory) ?? "food",
     summaryMessageId: row.summary_message_id,
     taggedUserIds: JSON.parse(row.tagged_user_ids),
     createdAt: row.created_at,

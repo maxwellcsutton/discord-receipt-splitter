@@ -35,7 +35,16 @@ export function initDatabase(): void {
       tax_amount REAL NOT NULL,
       tip_amount REAL,
       total REAL NOT NULL,
+      currency_code TEXT NOT NULL DEFAULT 'USD',
+      rate_to_usd REAL NOT NULL DEFAULT 1,
+      rate_date TEXT,
+      original_subtotal REAL NOT NULL DEFAULT 0,
+      original_discount REAL NOT NULL DEFAULT 0,
+      original_tax REAL NOT NULL DEFAULT 0,
+      original_tip REAL,
+      original_total REAL NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'active',
+      category TEXT NOT NULL DEFAULT 'food',
       summary_message_id TEXT,
       tagged_user_ids TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -109,6 +118,11 @@ export function initDatabase(): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS user_venmo_handles (
+      user_id TEXT PRIMARY KEY,
+      handle TEXT NOT NULL
+    );
   `);
 
   // Migration: add discount_amount to existing databases that pre-date this column
@@ -128,4 +142,147 @@ export function initDatabase(): void {
   if (!splitCols.some((c) => c.name === "share_pct")) {
     db.exec("ALTER TABLE split_items ADD COLUMN share_pct REAL");
   }
+
+  // Migration: add category to receipt_sessions (food vs non-food leaderboard eligibility)
+  const sessionCols = db
+    .prepare("PRAGMA table_info(receipt_sessions)")
+    .all() as { name: string }[];
+  if (!sessionCols.some((c) => c.name === "category")) {
+    db.exec("ALTER TABLE receipt_sessions ADD COLUMN category TEXT NOT NULL DEFAULT 'food'");
+  }
+
+  // Backfill: classify earlier movie/spellground receipts as non-food and remove their
+  // leaderboard impact. This is a one-time fix for receipts that were settled before
+  // category support existed.
+  const nonFoodBackfillDone = db
+    .prepare("SELECT value FROM meta WHERE key = 'non_food_backfill_v1'")
+    .get() as any;
+  if (!nonFoodBackfillDone) {
+    const tx = db.transaction(() => {
+      const nonFoodSessions = db
+        .prepare(
+          `SELECT id, restaurant_name FROM receipt_sessions
+           WHERE LOWER(restaurant_name) LIKE '%movie%'
+              OR LOWER(restaurant_name) LIKE '%spellground%'`
+        )
+        .all() as { id: string; restaurant_name: string }[];
+
+      const sessionIds = nonFoodSessions.map((s) => s.id);
+      if (sessionIds.length === 0) {
+        db.prepare(
+          "INSERT INTO meta (key, value) VALUES ('non_food_backfill_v1', ?)"
+        ).run(new Date().toISOString());
+        return;
+      }
+
+      const placeholders = sessionIds.map(() => '?').join(',');
+
+      // Pull the leaderboard entries that were generated from these sessions.
+      const entriesToRemove = db
+        .prepare(
+          `SELECT settlement_id, guild_id, user_id, restaurant_name, amount
+           FROM settlement_entries
+           WHERE session_id IN (${placeholders})`
+        )
+        .all(...sessionIds) as {
+          settlement_id: string;
+          guild_id: string;
+          user_id: string;
+          restaurant_name: string;
+          amount: number;
+        }[];
+
+      // Aggregate per-user and per-restaurant adjustments before deleting entries.
+      const userAdjustments = new Map<string, number>();
+      const restaurantSpendAdjustments = new Map<string, number>();
+      const restaurantSettlementIds = new Map<string, Set<string>>();
+
+      for (const entry of entriesToRemove) {
+        const userKey = `${entry.guild_id}|${entry.user_id}`;
+        userAdjustments.set(userKey, (userAdjustments.get(userKey) || 0) + entry.amount);
+
+        const restaurantKey = `${entry.guild_id}|${entry.restaurant_name}`;
+        restaurantSpendAdjustments.set(
+          restaurantKey,
+          (restaurantSpendAdjustments.get(restaurantKey) || 0) + entry.amount
+        );
+        const ids = restaurantSettlementIds.get(restaurantKey) || new Set<string>();
+        ids.add(entry.settlement_id);
+        restaurantSettlementIds.set(restaurantKey, ids);
+      }
+
+      // Subtract from aggregated user stats.
+      for (const [key, amount] of userAdjustments) {
+        const [guildId, userId] = key.split('|');
+        db.prepare(
+          'UPDATE user_stats SET total_spend = total_spend - ? WHERE guild_id = ? AND user_id = ?'
+        ).run(amount, guildId, userId);
+        db.prepare(
+          'DELETE FROM user_stats WHERE guild_id = ? AND user_id = ? AND total_spend <= 0'
+        ).run(guildId, userId);
+      }
+
+      // Subtract from aggregated restaurant stats (one receipt count per settlement_id).
+      for (const [key, amount] of restaurantSpendAdjustments) {
+        const [guildId, restaurantName] = key.split('|');
+        const receiptCount = restaurantSettlementIds.get(key)?.size || 0;
+        db.prepare(
+          `UPDATE restaurant_stats
+           SET total_spend = total_spend - ?, receipt_count = receipt_count - ?
+           WHERE guild_id = ? AND restaurant_name = ?`
+        ).run(amount, receiptCount, guildId, restaurantName);
+        db.prepare(
+          `DELETE FROM restaurant_stats
+           WHERE guild_id = ? AND restaurant_name = ? AND (total_spend <= 0 OR receipt_count <= 0)`
+        ).run(guildId, restaurantName);
+      }
+
+      // Delete the leaderboard history for these sessions so they no longer count
+      // in any leaderboard view.
+      db.prepare(
+        `DELETE FROM settlement_entries WHERE session_id IN (${placeholders})`
+      ).run(...sessionIds);
+
+      // Mark the sessions themselves as non-food.
+      db.prepare(
+        `UPDATE receipt_sessions SET category = 'non_food' WHERE id IN (${placeholders})`
+      ).run(...sessionIds);
+
+      db.prepare(
+        "INSERT INTO meta (key, value) VALUES ('non_food_backfill_v1', ?)"
+      ).run(new Date().toISOString());
+    });
+    tx();
+  }
+
+  // Migration: create user_venmo_handles for existing databases that pre-date it.
+  const venmoCols = db
+    .prepare("PRAGMA table_info(user_venmo_handles)")
+    .all() as { name: string }[];
+  if (venmoCols.length === 0) {
+    db.exec(`
+      CREATE TABLE user_venmo_handles (
+        user_id TEXT PRIMARY KEY,
+        handle TEXT NOT NULL
+      )
+    `);
+  }
+
+  // Migration: add currency columns to receipt_sessions for foreign-currency support.
+  const currencyCols = db
+    .prepare("PRAGMA table_info(receipt_sessions)")
+    .all() as { name: string }[];
+  const addCurrencyCol = (name: string, def: string) => {
+    if (!currencyCols.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE receipt_sessions ADD COLUMN ${name} ${def}`);
+    }
+  };
+  addCurrencyCol("currency_code", "TEXT NOT NULL DEFAULT 'USD'");
+  addCurrencyCol("rate_to_usd", "REAL NOT NULL DEFAULT 1");
+  addCurrencyCol("rate_date", "TEXT");
+  addCurrencyCol("original_subtotal", "REAL NOT NULL DEFAULT 0");
+  addCurrencyCol("original_discount", "REAL NOT NULL DEFAULT 0");
+  addCurrencyCol("original_tax", "REAL NOT NULL DEFAULT 0");
+  addCurrencyCol("original_tip", "REAL");
+  addCurrencyCol("original_total", "REAL NOT NULL DEFAULT 0");
 }

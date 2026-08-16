@@ -15,6 +15,18 @@ export interface ParsedReceipt {
   tax: number;
   tip: number | null;
   total: number;
+  // ISO 4217 currency code detected on the receipt. Defaults to USD.
+  currencyCode: string;
+  // USD exchange rate used (1 for USD receipts).
+  rateToUsd: number;
+  // Date of the exchange rate, if available from the rate provider.
+  rateDate: string | null;
+  // Original receipt amounts before conversion to USD.
+  originalSubtotal: number;
+  originalDiscount: number;
+  originalTax: number;
+  originalTip: number | null;
+  originalTotal: number;
 }
 
 export interface LineItem {
@@ -34,6 +46,7 @@ export interface SplitEntry {
 }
 
 export type SessionStatus = "active" | "all_claimed" | "settled" | "voided";
+export type ReceiptCategory = "food" | "non_food";
 
 export interface ReceiptSession {
   id: string;
@@ -48,7 +61,17 @@ export interface ReceiptSession {
   taxAmount: number;
   tipAmount: number | null;
   total: number;
+  // ISO 4217 currency code detected on the receipt. All stored amounts are USD.
+  currencyCode: string;
+  rateToUsd: number;
+  rateDate: string | null;
+  originalSubtotal: number;
+  originalDiscount: number;
+  originalTax: number;
+  originalTip: number | null;
+  originalTotal: number;
   status: SessionStatus;
+  category: ReceiptCategory;
   summaryMessageId: string | null;
   taggedUserIds: string[];
   createdAt: string;

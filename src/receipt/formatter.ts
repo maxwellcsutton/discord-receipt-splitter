@@ -1,6 +1,13 @@
-import { EmbedBuilder } from "discord.js";
+import {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} from "discord.js";
+import { config } from "../config.js";
 import { ReceiptSession, LineItem, UserTotal, SplitEntry } from "./types.js";
-import { DisplayNameResolver } from "../utils/discord.js";
+import { DisplayNameResolver, isProxyUserId } from "../utils/discord.js";
+import { formatOriginalCurrency } from "./currency.js";
 
 const INDENT = "\u2800"; // U+2800 braille blank — not stripped by Discord on first line
 const FIELD_LIMIT = 1024;
@@ -39,6 +46,71 @@ function buildSplitMap(splits: SplitEntry[]): Map<number, SplitEntry[]> {
     splitMap.get(s.lineItemIndex)!.push(s);
   }
   return splitMap;
+}
+
+export function buildVenmoUrl(handle: string, amount: number, note: string): string {
+  const params = new URLSearchParams();
+  params.set("txn", "pay");
+  params.set("amount", amount.toFixed(2));
+  params.set("note", note);
+  return `https://venmo.com/${encodeURIComponent(handle)}?${params.toString()}`;
+}
+
+function shouldShowVenmoButton(
+  session: ReceiptSession,
+  userId: string,
+  grandTotal: number,
+  paid: boolean,
+  primaryVenmoHandle: string | null,
+): boolean {
+  if (!config.venmoEnabled || !primaryVenmoHandle) return false;
+  if (userId === session.primaryUserId) return false;
+  if (isProxyUserId(userId)) return false;
+  if (grandTotal <= 0) return false;
+  if (paid) return false;
+  return true;
+}
+
+export function buildUserVenmoButton(
+  session: ReceiptSession,
+  ut: UserTotal,
+  paid: boolean,
+  primaryVenmoHandle: string | null,
+  displayName: DisplayNameResolver,
+): ButtonBuilder | null {
+  if (!primaryVenmoHandle) return null;
+  if (!shouldShowVenmoButton(session, ut.userId, ut.grandTotal, paid, primaryVenmoHandle)) {
+    return null;
+  }
+  const label = `Pay ${displayName(ut.userId)} $${ut.grandTotal.toFixed(2)}`;
+  const url = buildVenmoUrl(primaryVenmoHandle, ut.grandTotal, session.restaurantName);
+  return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(url);
+}
+
+export function buildSummaryVenmoComponents(
+  session: ReceiptSession,
+  userTotals: UserTotal[],
+  payments: { userId: string; paid: boolean }[],
+  primaryVenmoHandle: string | null,
+  displayName: DisplayNameResolver,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const paymentMap = new Map(payments.map((p) => [p.userId, p.paid]));
+  const buttons: ButtonBuilder[] = [];
+
+  for (const ut of userTotals) {
+    const paid = paymentMap.get(ut.userId) ?? false;
+    const button = buildUserVenmoButton(session, ut, paid, primaryVenmoHandle, displayName);
+    if (button) buttons.push(button);
+  }
+
+  // Discord allows at most 5 action rows per message (5 buttons per row).
+  const capped = buttons.slice(0, 25);
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  for (let i = 0; i < capped.length; i += 5) {
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(capped.slice(i, i + 5));
+    rows.push(row);
+  }
+  return rows;
 }
 
 export function buildUserEmbed(
@@ -96,8 +168,9 @@ export function buildSummaryEmbeds(
   userTotals: UserTotal[],
   payments: { userId: string; paid: boolean }[],
   splits: SplitEntry[],
-  displayName: DisplayNameResolver
-): EmbedBuilder[] {
+  displayName: DisplayNameResolver,
+  primaryVenmoHandle: string | null = null,
+): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
   const paymentMap = new Map(payments.map((p) => [p.userId, p.paid]));
 
   const unclaimed = items.filter((i) => !i.claimedByUserId);
@@ -120,10 +193,16 @@ export function buildSummaryEmbeds(
   const embeds: EmbedBuilder[] = [];
 
   // Embed 1: header + unclaimed items
+  const categorySuffix = session.category === 'non_food' ? ' · 🏷️ Non-food' : '';
   const headerEmbed = new EmbedBuilder()
-    .setTitle(`🧾 ${session.restaurantName}`)
+    .setTitle(`🧾 ${session.restaurantName}${categorySuffix}`)
     .setColor(allPaid ? 0x2ecc71 : allClaimed ? 0xf1c40f : 0xe74c3c)
     .setFooter({ text: footerText });
+
+  const descriptionLines: string[] = [];
+  if (session.currencyCode !== 'USD') {
+    descriptionLines.push(`Converted to USD from ${formatOriginalCurrency(session)}`);
+  }
 
   if (unclaimed.length > 0) {
     const lines = unclaimed.map((i) => {
@@ -132,7 +211,11 @@ export function buildSummaryEmbeds(
     });
     addChunkedFields(headerEmbed, "UNCLAIMED", lines);
   } else {
-    headerEmbed.setDescription("All items have been claimed.");
+    descriptionLines.push("All items have been claimed.");
+  }
+
+  if (descriptionLines.length > 0) {
+    headerEmbed.setDescription(descriptionLines.join('\n'));
   }
 
   embeds.push(headerEmbed);
@@ -143,7 +226,15 @@ export function buildSummaryEmbeds(
     embeds.push(buildUserEmbed(ut, paid, splits, session, displayName));
   }
 
-  return embeds;
+  const components = buildSummaryVenmoComponents(
+    session,
+    userTotals,
+    payments,
+    primaryVenmoHandle,
+    displayName,
+  );
+
+  return { embeds, components };
 }
 
 export function formatItemList(taggedUserIds: string[]): string {
@@ -170,6 +261,7 @@ export function formatThreadHelp(): string {
     "`split 3 @user1 30% @user2 70%` — split with uneven percentages (must sum to 100%)",
     "`split 3 @user alice 30%` — mix Discord users and `addproxy` names (proxy names are matched case-insensitively)",
     "`split all` / `s all` — split every unclaimed item evenly among everyone (claimed items are left alone). Add `- 3 5` to skip items and/or `- @user` to skip a user, e.g. `split all - 3 - @alice`",
+    "`venmo <handle>` / `v <handle>` — set your Venmo handle so others can pay you directly (omit handle to see current, `venmo remove` to clear)",
     "`tip 20%` / `t 20%` — set tip (primary user only)",
     "`discount 5.00` / `discount 15%` / `discount remove` — add, edit, or remove a discount (primary user only)",
     "`paid` / `p` — mark yourself as paid",
@@ -184,6 +276,8 @@ export function formatThreadHelp(): string {
     "`adduser @user` / `au @user` — add a new user to the receipt (primary user only)",
     "`addproxy Alice` / `ap Alice` — add a placeholder for someone not in Discord (primary user only)",
     "`rescan <optional hint>` — re-parse the receipt image; include a hint like `rescan item 3 was missed` (primary user only, resets all claims)",
+    "`nonfood` / `nf` — mark this receipt as non-food so it won't count on leaderboards (primary user only)",
+    "`food` — mark this receipt as food so it will count on leaderboards (primary user only)",
     "`void` — void this receipt and lock the thread (primary user only)",
     "_(Primary user: add `@user` to any command to act on their behalf, or `as <proxyname>` for a proxy user)_",
   ].join("\n");
@@ -204,6 +298,7 @@ export function formatChannelHelp(): string {
     "`@bot leaderboard from 2026-01-01 to 2026-03-31` — limit to a date range (`to` optional)",
     "`@bot personal leaderboard` — show your own spending stats",
     "`@bot addtotal <restaurant> <amount>` — manually log a receipt to the leaderboard",
+    "`@bot new <location>` — find restaurants near you similar to your group's favorites",
     "`@bot help` — show this message",
   ].join("\n");
 }

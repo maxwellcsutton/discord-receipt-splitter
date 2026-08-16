@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import { ParsedReceipt, LineItem } from "./types.js";
+import { convertToUsd } from "./currency.js";
 
 const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
 
@@ -65,8 +66,17 @@ const RECEIPT_SCHEMA = {
     tax: { type: "number" as const },
     tip: { type: ["number", "null"] as const },
     total: { type: "number" as const },
+    currency_code: { type: "string" as const },
   },
-  required: ["items", "subtotal", "discount", "tax", "tip", "total"] as const,
+  required: [
+    "items",
+    "subtotal",
+    "discount",
+    "tax",
+    "tip",
+    "total",
+    "currency_code",
+  ] as const,
   additionalProperties: false,
 };
 
@@ -84,6 +94,7 @@ interface RawReceipt {
   tax: number;
   tip: number | null;
   total: number;
+  currency_code: string;
 }
 
 export interface ParseResult {
@@ -218,26 +229,26 @@ export async function parseReceiptImage(
           },
           {
             type: "text",
-            text: `${userHint ? `USER HINT (pay close attention): ${userHint}\n\n` : ""}Extract all line items from this receipt. For each line item output one entry with:
-- name: the item name, stripped of any parenthetical numbers (e.g. "Mild Spicy Lamb Kebab(5)" → "Mild Spicy Lamb Kebab")
+            text: `${userHint ? `USER HINT (pay close attention): ${userHint}\n\n` : ""}Extract all line items from this receipt. The receipt may be in any language and any currency. Read item names in their original language/script (do not translate). For each line item output one entry with:
+- name: the item name exactly as printed, stripped of any parenthetical numbers (e.g. "Mild Spicy Lamb Kebab(5)" → "Mild Spicy Lamb Kebab")
 - quantity: the number in the LEFTMOST column of that line. This is the only source of truth for quantity. Numbers inside the item name (like the "(5)" or "(1)") are NOT the quantity — ignore them.
-- line_total: the TOTAL price charged for this item (see MODIFIERS below)
+- line_total: the TOTAL price charged for this item in the receipt's original currency (see MODIFIERS below)
 - printed_unit_price: if the line shows a per-unit price like "5 @18.99" or "2 @ 4.59", record that per-unit number (18.99, 4.59). Otherwise null. This is the price PRINTED on the line, not something you compute.
 
-PER-UNIT PRICES ("N @ X.XX"): when a line shows a quantity and a per-unit price together — e.g. "Country Steak & Eggs (5 @18.99)" — it means 5 units at $18.99 each, so the line_total is 5 × 18.99 = 94.95. The printed per-unit price is AUTHORITATIVE: set quantity=5, printed_unit_price=18.99, line_total=94.95. NEVER infer a unit price by dividing a line_total by the quantity — if you find yourself computing "16.49 ÷ 5 = 3.30", you have grabbed the wrong line_total. The printed per-unit price sits right next to its item, so use it to anchor that row even if the price column looks shifted.
+PER-UNIT PRICES ("N @ X.XX"): when a line shows a quantity and a per-unit price together — e.g. "Country Steak & Eggs (5 @18.99)" — it means 5 units at 18.99 each, so the line_total is 5 × 18.99 = 94.95. The printed per-unit price is AUTHORITATIVE: set quantity=5, printed_unit_price=18.99, line_total=94.95. NEVER infer a unit price by dividing a line_total by the quantity — if you find yourself computing "16.49 ÷ 5 = 3.30", you have grabbed the wrong line_total. The printed per-unit price sits right next to its item, so use it to anchor that row even if the price column looks shifted.
 
 MODIFIERS / ADD-ONS: Many receipts show modifiers, add-ons, options, or customizations INDENTED beneath a parent item (e.g. "Arrachera $2.16", "Add Guacamole $1.08", "Chile Guero $0.00" under a "Burrito" line). These are NOT separate items — they are upcharges or options that belong to the parent item. For each parent item:
 - Sum the parent's base price with the prices of all its indented modifier lines to produce line_total
 - Do NOT emit separate JSON entries for modifier/add-on lines
-- Modifiers with $0.00 are free options — include them in the name if useful (e.g. "Burrito (Arrachera, Add Guacamole)"), but do not create separate entries
+- Modifiers with 0.00 are free options — include them in the name if useful (e.g. "Burrito (Arrachera, Add Guacamole)"), but do not create separate entries
 
 A line is a MODIFIER if it is visually indented under another item, starts with words like "Add", "Extra", "Side", or describes a sub-choice (meat type, temperature, side). A line is a PARENT item if it has its own quantity in the leftmost column.
 
-IMPORTANT: Do NOT output both a summed parent line_total AND a separate modifier entry. Each modifier's price should appear ONLY in the parent's line_total, never as its own item. For example, if "Burrito" has line_total 19.87 (already including $1.08 guacamole), do NOT also emit "Add Guacamole" as a separate item.
+IMPORTANT: Do NOT output both a summed parent line_total AND a separate modifier entry. Each modifier's price should appear ONLY in the parent's line_total, never as its own item. For example, if "Burrito" has line_total 19.87 (already including 1.08 guacamole), do NOT also emit "Add Guacamole" as a separate item.
 
 Output one JSON object per PARENT receipt line — do not expand or split quantities, that will be handled separately.
 
-Also extract subtotal, discount (0 if none), tax, tip (null if not on receipt), and total. Discount is any coupon, promo, or discount line that reduces the subtotal.
+Also extract subtotal, discount (0 if none), tax, tip (null if not on receipt), total, and currency_code. All monetary values must be in the receipt's original currency. The currency_code is the ISO 4217 code (e.g. "USD", "EUR", "JPY", "GBP", "MXN", "CAD"). If no currency symbol/code is visible, infer it from the country/language context when possible; otherwise default to "USD". Discount is any coupon, promo, or discount line that reduces the subtotal.
 
 PRICE ALIGNMENT (receipts are often photographed at an angle): item names run down the left, prices down the right. When the photo is skewed, a price can sit slightly higher or lower than the item it belongs to, so the two columns drift out of step. Read each row by following the item across to the price on its line — do NOT blindly pair the Nth item with the Nth price. If a price looks implausible for an item (a side or drink priced like an entrée, or vice versa), the alignment is probably off by a row.
 
@@ -272,6 +283,7 @@ ${JSON.stringify(RECEIPT_SCHEMA)}`,
   // Items are stored at their RAW (pre-discount) prices. Any session-level
   // discount is applied at calc/display time so discount changes flow through
   // to every item — parsed or custom-added.
+  const currencyCode = (raw.currency_code || "USD").trim().toUpperCase();
   const parsed: ParsedReceipt = {
     items: raw.items.map((item) => {
       const unitPrice = Math.round((item.line_total / item.quantity) * 100) / 100;
@@ -288,6 +300,14 @@ ${JSON.stringify(RECEIPT_SCHEMA)}`,
     tax: raw.tax,
     tip: raw.tip,
     total: raw.total,
+    currencyCode,
+    rateToUsd: 1,
+    rateDate: null,
+    originalSubtotal: raw.subtotal,
+    originalDiscount: raw.discount ?? 0,
+    originalTax: raw.tax,
+    originalTip: raw.tip,
+    originalTotal: raw.total,
   };
 
   const estimatedCostUsd =
@@ -339,6 +359,10 @@ export function subtotalItemsDiff(
   return Math.abs(itemsSum - parsed.subtotal);
 }
 
+function currencySymbol(code: string): string {
+  return code.toUpperCase() === "USD" ? "$" : `${code} `;
+}
+
 export function validateReceipt(
   parsed: ParsedReceipt,
   items: LineItem[]
@@ -346,7 +370,8 @@ export function validateReceipt(
   const itemsSum = items.reduce((sum, item) => sum + item.unitPrice, 0);
   const diff = Math.abs(itemsSum - parsed.subtotal);
   if (diff > 0.5) {
-    return `Warning: Item prices sum to $${itemsSum.toFixed(2)} but receipt subtotal is $${parsed.subtotal.toFixed(2)} (difference: $${diff.toFixed(2)}).`;
+    const sym = currencySymbol(parsed.currencyCode);
+    return `Warning: Item prices sum to ${sym}${itemsSum.toFixed(2)} but receipt subtotal is ${sym}${parsed.subtotal.toFixed(2)} (difference: ${sym}${diff.toFixed(2)}).`;
   }
   return null;
 }
@@ -393,10 +418,11 @@ function reconciliationScore(parsed: ParsedReceipt, items: LineItem[]): number {
 function reconciliationWarning(parsed: ParsedReceipt, items: LineItem[]): string | null {
   const mismatches = unitPriceMismatches(parsed);
   if (mismatches.length > 0) {
+    const sym = currencySymbol(parsed.currencyCode);
     const lines = mismatches
       .map(
         (m) =>
-          `“${m.name}” is ${m.quantity} @ $${m.printedUnitPrice.toFixed(2)} = $${m.expectedTotal.toFixed(2)}, but got $${m.actualTotal.toFixed(2)}`,
+          `“${m.name}” is ${m.quantity} @ ${sym}${m.printedUnitPrice.toFixed(2)} = ${sym}${m.expectedTotal.toFixed(2)}, but got ${sym}${m.actualTotal.toFixed(2)}`,
       )
       .join("; ");
     return `Warning: per-unit prices don't reconcile (${lines}). The price column may be misaligned.`;
@@ -413,11 +439,12 @@ function buildAlignmentRetryHint(
   items: LineItem[],
   userHint?: string,
 ): string {
+  const sym = currencySymbol(parsed.currencyCode);
   const itemsSum = items.reduce((s, i) => s + i.unitPrice, 0);
   const subtotalDiff = Math.abs(itemsSum - parsed.subtotal);
   const mismatches = unitPriceMismatches(parsed);
   const breakdown = parsed.items
-    .map((it) => `  - ${it.name}: $${it.total_price.toFixed(2)}`)
+    .map((it) => `  - ${it.name}: ${sym}${it.total_price.toFixed(2)}`)
     .join("\n");
 
   const anchorBlock =
@@ -426,7 +453,7 @@ function buildAlignmentRetryHint(
           `Some lines print their own per-unit price, which fixes their total regardless of how the column lines up. These are WRONG and must be corrected:`,
           ...mismatches.map(
             (m) =>
-              `  - “${m.name}” is printed as ${m.quantity} @ $${m.printedUnitPrice.toFixed(2)}, so its line total must be $${m.expectedTotal.toFixed(2)} — you reported $${m.actualTotal.toFixed(2)}.`,
+              `  - “${m.name}” is printed as ${m.quantity} @ ${sym}${m.printedUnitPrice.toFixed(2)}, so its line total must be ${sym}${m.expectedTotal.toFixed(2)} — you reported ${sym}${m.actualTotal.toFixed(2)}.`,
           ),
           `Pin those lines to their correct totals, then re-align the rest of the price column around them (the whole column is likely shifted by a row).`,
         ].join("\n")
@@ -434,7 +461,7 @@ function buildAlignmentRetryHint(
 
   const subtotalBlock =
     subtotalDiff > 0.5
-      ? `The line items sum to $${itemsSum.toFixed(2)} but the subtotal is $${parsed.subtotal.toFixed(2)}.`
+      ? `The line items sum to ${sym}${itemsSum.toFixed(2)} but the subtotal is ${sym}${parsed.subtotal.toFixed(2)}.`
       : `Note: the totals happen to sum to the subtotal, but that does NOT mean the mapping is right — a one-row shift of the whole column preserves the sum. Verify each line individually.`;
 
   return [
@@ -458,10 +485,60 @@ export interface ReconciledParseResult {
   retried: boolean;
 }
 
+async function convertParsedToUsd(
+  parsed: ParsedReceipt,
+  items: LineItem[],
+): Promise<{ parsed: ParsedReceipt; items: LineItem[] }> {
+  const converted = await convertToUsd({
+    currencyCode: parsed.currencyCode,
+    subtotal: parsed.subtotal,
+    discount: parsed.discount,
+    tax: parsed.tax,
+    tip: parsed.tip,
+    total: parsed.total,
+  });
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const convertedItems = items.map((item) => ({
+    ...item,
+    unitPrice: round2(item.unitPrice * converted.rateToUsd),
+  }));
+
+  return {
+    parsed: {
+      ...parsed,
+      items: parsed.items.map((item) => ({
+        ...item,
+        unit_price: round2(item.unit_price * converted.rateToUsd),
+        total_price: round2(item.total_price * converted.rateToUsd),
+        printed_unit_price:
+          item.printed_unit_price === null
+            ? null
+            : round2(item.printed_unit_price * converted.rateToUsd),
+      })),
+      subtotal: converted.subtotal,
+      discount: converted.discount,
+      tax: converted.tax,
+      tip: converted.tip,
+      total: converted.total,
+      currencyCode: converted.currencyCode,
+      rateToUsd: converted.rateToUsd,
+      rateDate: converted.rateDate,
+      originalSubtotal: converted.originalSubtotal,
+      originalDiscount: converted.originalDiscount,
+      originalTax: converted.originalTax,
+      originalTip: converted.originalTip,
+      originalTotal: converted.originalTotal,
+    },
+    items: convertedItems,
+  };
+}
+
 // Parse the receipt and, if it doesn't reconcile (subtotal mismatch OR a
 // printed per-unit line that doesn't add up), retry once with a targeted hint.
 // Keeps whichever attempt reconciles best. Used by both the initial scan and
 // the manual `rescan` command so both self-correct on angled receipts.
+// After reconciliation, amounts are converted to USD.
 export async function parseReceiptWithReconciliation(
   imageBase64: string,
   mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp",
@@ -472,24 +549,32 @@ export async function parseReceiptWithReconciliation(
   let items = expandLineItems(parsed);
   let warning = reconciliationWarning(parsed, items);
   let estimatedCostUsd = first.estimatedCostUsd;
+  let retried = false;
 
-  if (!warning) {
-    return { parsed, items, warning, estimatedCostUsd, retried: false };
+  if (warning) {
+    retried = true;
+    const retryHint = buildAlignmentRetryHint(parsed, items, userHint);
+    const retry = await parseReceiptImage(imageBase64, mediaType, retryHint);
+    estimatedCostUsd += retry.estimatedCostUsd;
+    const retryItems = expandLineItems(retry.parsed);
+
+    if (
+      reconciliationScore(retry.parsed, retryItems) <
+      reconciliationScore(parsed, items)
+    ) {
+      parsed = retry.parsed;
+      items = retryItems;
+    }
+    warning = reconciliationWarning(parsed, items);
   }
 
-  const retryHint = buildAlignmentRetryHint(parsed, items, userHint);
-  const retry = await parseReceiptImage(imageBase64, mediaType, retryHint);
-  estimatedCostUsd += retry.estimatedCostUsd;
-  const retryItems = expandLineItems(retry.parsed);
+  const converted = await convertParsedToUsd(parsed, items);
 
-  if (
-    reconciliationScore(retry.parsed, retryItems) <
-    reconciliationScore(parsed, items)
-  ) {
-    parsed = retry.parsed;
-    items = retryItems;
-  }
-  warning = reconciliationWarning(parsed, items);
-
-  return { parsed, items, warning, estimatedCostUsd, retried: true };
+  return {
+    parsed: converted.parsed,
+    items: converted.items,
+    warning,
+    estimatedCostUsd,
+    retried,
+  };
 }

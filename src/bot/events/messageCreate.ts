@@ -6,6 +6,8 @@ import {
   ChannelType,
   EmbedBuilder,
   APIEmbed,
+  ActionRowBuilder,
+  ButtonBuilder,
   OmitPartialGroupDMChannel,
   MessagePayload,
   MessageReplyOptions,
@@ -16,9 +18,11 @@ import { config } from '../../config.js';
 import {
   parseReceiptWithReconciliation,
 } from '../../receipt/parser.js';
+import { findSimilarRestaurants } from '../../receipt/recommend.js';
 import {
   buildSummaryEmbeds,
   buildUserEmbed,
+  buildUserVenmoButton,
   formatItemList,
   formatThreadHelp,
   formatChannelHelp,
@@ -37,7 +41,9 @@ import {
 } from '../../utils/discord.js';
 import { ReceiptSession, UserTotal } from '../../receipt/types.js';
 
-export function hasEmbeds(value: unknown): value is { embeds: EmbedBuilder[] } {
+export function hasEmbeds(
+  value: unknown,
+): value is { embeds: EmbedBuilder[]; components?: ActionRowBuilder<ButtonBuilder>[] } {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -55,8 +61,13 @@ export async function messageReplyHandler(
     await message.reply(input);
   } catch (err: any) {
     if (err?.code == 50035 && hasEmbeds(input)) {
+      const components = input.components;
       for (let i = 0; i < input.embeds.length; i++) {
-        await message.reply({ embeds: [input.embeds[i].data] });
+        // Attach components only to the last message so they appear at the bottom.
+        await message.reply({
+          embeds: [input.embeds[i].data],
+          components: i === input.embeds.length - 1 ? components : undefined,
+        });
       }
     } else {
       console.error('Error handling message:', err);
@@ -80,8 +91,12 @@ export async function threadSendHandler(
   } catch (err: any) {
     if (err?.code == 50035 && hasEmbeds(input)) {
       let lastMsg;
+      const components = input.components;
       for (let i = 0; i < input.embeds.length; i++) {
-        const msg = await thread.send({ embeds: [input.embeds[i].data] });
+        const msg = await thread.send({
+          embeds: [input.embeds[i].data],
+          components: i === input.embeds.length - 1 ? components : undefined,
+        });
         lastMsg = msg;
       }
       return lastMsg as Message<true>;
@@ -112,10 +127,18 @@ export function registerMessageCreateEvent(client: Client): void {
       if (!message.mentions.has(client.user!)) return;
 
       const content = message.content.toLowerCase();
+      const hasImage = message.attachments.some((a) => a.contentType?.startsWith('image/'));
 
       // Help command
       if (content.includes('help')) {
         await message.reply(formatChannelHelp());
+        return;
+      }
+
+      // New restaurant suggestions (must come before the bare-new-receipt handler)
+      const noMentions = message.content.replace(/<@!?\d+>/g, '').trim();
+      if (!hasImage && /^new(\s+|$)/i.test(noMentions)) {
+        await handleNewRestaurantSuggestions(message);
         return;
       }
 
@@ -143,7 +166,6 @@ export function registerMessageCreateEvent(client: Client): void {
       // Recent / open receipts uploaded by the requester.
       // Guard on no image so a new-receipt submission whose caption is a bare
       // number (e.g. a restaurant named "10") isn't swallowed here.
-      const hasImage = message.attachments.some((a) => a.contentType?.startsWith('image/'));
       const cleaned = content.replace(/<@!?\d+>/g, '').trim();
       if (!hasImage && (cleaned === 'open' || cleaned === 'open receipts')) {
         await handleOpenReceipts(message);
@@ -402,6 +424,61 @@ async function handleLeaderboard(message: Message): Promise<void> {
   await message.reply({ embeds: [embed] });
 }
 
+async function handleNewRestaurantSuggestions(message: Message): Promise<void> {
+  if (!message.guildId || !message.guild) {
+    await message.reply('Restaurant suggestions are only available in servers.');
+    return;
+  }
+
+  const location = message.content
+    .replace(/<@!?\d+>/g, '')
+    .trim()
+    .replace(/^new\s*/i, '')
+    .trim();
+
+  if (!location) {
+    await message.reply('Usage: `@bot new <location>` — e.g. `@bot new Austin, TX`');
+    return;
+  }
+
+  const favorites = manager.getMostFrequentRestaurants(message.guildId, 10);
+  if (favorites.length === 0) {
+    await message.reply(
+      "I don't have any restaurant history for this server yet. Upload a few receipts first!",
+    );
+    return;
+  }
+
+  manager.checkDailyLimit();
+
+  const result = await findSimilarRestaurants(
+    favorites.map((f) => ({ name: f.restaurantName, receiptCount: f.receiptCount })),
+    location,
+    5,
+  );
+  manager.logApiCost(result.estimatedCostUsd);
+
+  const basis = favorites
+    .slice(0, 5)
+    .map((f) => `${f.restaurantName} (${f.receiptCount} visit${f.receiptCount !== 1 ? 's' : ''})`)
+    .join(', ');
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🍽️ New restaurant ideas near ${location}`)
+    .setColor(0x2ecc71)
+    .setDescription(`Based on your group's favorites: ${basis}`);
+
+  for (const r of result.restaurants) {
+    embed.addFields({
+      name: `${r.name} · ${r.cuisine} · ${r.priceRange}`,
+      value: r.reason,
+      inline: false,
+    });
+  }
+
+  await message.reply({ embeds: [embed] });
+}
+
 async function handlePersonalLeaderboard(message: Message): Promise<void> {
   if (!message.guildId || !message.guild) {
     await message.reply('Personal stats are only available in servers.');
@@ -652,14 +729,23 @@ async function handleSum(message: Message, client: Client, markPaid: boolean): P
         const userTotals = manager.getUserTotals(refreshedSession);
         const payments = manager.getPaymentStatuses(session.id);
         const splits = manager.getSplits(session.id);
-        const embeds = buildSummaryEmbeds(refreshedSession, items, userTotals, payments, splits, displayName);
+        const primaryHandle = manager.getUserVenmoHandle(refreshedSession.primaryUserId);
+        const { embeds, components } = buildSummaryEmbeds(
+          refreshedSession,
+          items,
+          userTotals,
+          payments,
+          splits,
+          displayName,
+          primaryHandle,
+        );
 
         if (session.summaryMessageId) {
           try {
             const summaryMsg = await thread.messages.fetch(session.summaryMessageId);
-            await summaryMsg.edit({ embeds });
+            await summaryMsg.edit({ embeds, components });
           } catch {
-            const newMsg = await threadSendHandler(thread, { embeds });
+            const newMsg = await threadSendHandler(thread, { embeds, components });
             manager.setSummaryMessageId(session.id, newMsg.id);
           }
         }
@@ -736,7 +822,17 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
   const buffer = Buffer.from(await response.arrayBuffer());
   const imageBase64 = buffer.toString('base64');
 
-  const result = await parseReceiptWithReconciliation(imageBase64, mediaType);
+  let result;
+  try {
+    result = await parseReceiptWithReconciliation(imageBase64, mediaType);
+  } catch (err) {
+    await message.reactions.removeAll().catch(() => {});
+    const reason = err instanceof Error ? err.message : String(err);
+    await message.reply(
+      `⚠️ Couldn't read this receipt: ${reason}`
+    );
+    return;
+  }
   manager.logApiCost(result.estimatedCostUsd);
 
   const parsed = result.parsed;
@@ -768,7 +864,16 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
     taxAmount: parsed.tax,
     tipAmount: effectiveTip,
     total: parsed.total,
+    currencyCode: parsed.currencyCode,
+    rateToUsd: parsed.rateToUsd,
+    rateDate: parsed.rateDate,
+    originalSubtotal: parsed.originalSubtotal,
+    originalDiscount: parsed.originalDiscount,
+    originalTax: parsed.originalTax,
+    originalTip: parsed.originalTip,
+    originalTotal: parsed.originalTotal,
     status: 'active',
+    category: 'food',
     summaryMessageId: null,
     taggedUserIds: [message.author.id, ...taggedUserIds],
     createdAt: new Date().toISOString(),
@@ -783,8 +888,17 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
   const userTotals = manager.getUserTotals(session);
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
-  const embeds = buildSummaryEmbeds(session, lineItems, userTotals, payments, splits, displayName);
-  const summaryMsg = await threadSendHandler(thread, { embeds });
+  const primaryHandle = manager.getUserVenmoHandle(session.primaryUserId);
+  const { embeds, components } = buildSummaryEmbeds(
+    session,
+    lineItems,
+    userTotals,
+    payments,
+    splits,
+    displayName,
+    primaryHandle,
+  );
+  const summaryMsg = await threadSendHandler(thread, { embeds, components });
   manager.setSummaryMessageId(session.id, summaryMsg.id);
 
   if (wasRescanned) {
@@ -883,8 +997,28 @@ async function handleThreadMessage(message: Message, client: Client): Promise<vo
     return;
   }
 
+  if (contentClean === 'nonfood' || contentClean === 'nf') {
+    await handleCategory(message, session, 'non_food');
+    return;
+  }
+
+  if (contentClean === 'food') {
+    await handleCategory(message, session, 'food');
+    return;
+  }
+
   if (contentClean === 'help' || contentClean === 'h') {
     await message.reply(formatThreadHelp());
+    return;
+  }
+
+  if (
+    contentClean.startsWith('venmo ') ||
+    contentClean === 'venmo' ||
+    contentClean.startsWith('v ') ||
+    contentClean === 'v'
+  ) {
+    await handleVenmo(message, session, contentClean);
     return;
   }
 
@@ -981,7 +1115,10 @@ async function handleClaim(
     const paid = payments.find((p) => p.userId === targetUserId)?.paid ?? false;
     const embed = buildUserEmbed(ut, paid, splits, refreshedSession, displayName);
     embed.setDescription("Reply `paid` / `p` when you've paid.");
-    await message.reply({ embeds: [embed] });
+    const primaryHandle = manager.getUserVenmoHandle(refreshedSession.primaryUserId);
+    const venmoButton = buildUserVenmoButton(refreshedSession, ut, paid, primaryHandle, displayName);
+    const components = venmoButton ? [new ActionRowBuilder<ButtonBuilder>().addComponents(venmoButton)] : [];
+    await message.reply({ embeds: [embed], components });
   }
 
   await updateSummaryMessage(message, refreshedSession);
@@ -1483,7 +1620,17 @@ async function handleRescan(
   const buffer = Buffer.from(await response.arrayBuffer());
   const imageBase64 = buffer.toString('base64');
 
-  const result = await parseReceiptWithReconciliation(imageBase64, mediaType, hint || undefined);
+  let result;
+  try {
+    result = await parseReceiptWithReconciliation(imageBase64, mediaType, hint || undefined);
+  } catch (err) {
+    await message.reactions.removeAll().catch(() => {});
+    const reason = err instanceof Error ? err.message : String(err);
+    await message.reply(
+      `⚠️ Couldn't re-scan this receipt: ${reason}`
+    );
+    return;
+  }
   manager.logApiCost(result.estimatedCostUsd);
 
   const parsed = result.parsed;
@@ -1498,6 +1645,14 @@ async function handleRescan(
     taxAmount: parsed.tax,
     tipAmount: session.tipAmount,
     total: parsed.total,
+    currencyCode: parsed.currencyCode,
+    rateToUsd: parsed.rateToUsd,
+    rateDate: parsed.rateDate,
+    originalSubtotal: parsed.originalSubtotal,
+    originalDiscount: parsed.originalDiscount,
+    originalTax: parsed.originalTax,
+    originalTip: parsed.originalTip,
+    originalTotal: parsed.originalTotal,
   });
 
   await message.reactions.removeAll().catch(() => {});
@@ -1530,6 +1685,34 @@ async function handleVoid(message: Message, session: ReceiptSession): Promise<vo
   } catch {
     // ignore — bot may lack manage-threads permission
   }
+}
+
+async function handleCategory(
+  message: Message,
+  session: ReceiptSession,
+  category: 'food' | 'non_food',
+): Promise<void> {
+  if (message.author.id !== session.primaryUserId) {
+    await message.reply('Only the primary user can change the receipt category.');
+    return;
+  }
+
+  if (session.status === 'settled') {
+    await message.reply(
+      "This receipt is already settled — its category can't be changed. Void and re-upload if needed.",
+    );
+    return;
+  }
+
+  manager.setSessionCategory(session.id, category);
+
+  const label = category === 'non_food' ? 'non-food' : 'food';
+  await message.reply(
+    `This receipt is now marked as **${label}**. It ${category === 'non_food' ? 'will not' : 'will'} count toward leaderboards.`,
+  );
+
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
+  await updateSummaryMessage(message, refreshedSession);
 }
 
 async function handleUnpaid(message: Message, session: ReceiptSession, targetUserId: string): Promise<void> {
@@ -1588,8 +1771,63 @@ async function handleStatus(message: Message, session: ReceiptSession): Promise<
   const userTotals = manager.getUserTotals(session);
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
-  const embeds = buildSummaryEmbeds(session, items, userTotals, payments, splits, displayName);
-  await messageReplyHandler(message, { embeds });
+  const primaryHandle = manager.getUserVenmoHandle(session.primaryUserId);
+  const { embeds, components } = buildSummaryEmbeds(
+    session,
+    items,
+    userTotals,
+    payments,
+    splits,
+    displayName,
+    primaryHandle,
+  );
+  await messageReplyHandler(message, { embeds, components });
+}
+
+async function handleVenmo(
+  message: Message,
+  session: ReceiptSession,
+  contentClean: string,
+): Promise<void> {
+  if (!config.venmoEnabled) {
+    await message.reply('Venmo buttons are not enabled on this bot.');
+    return;
+  }
+
+  const prefix = contentClean.startsWith('venmo') ? 'venmo' : 'v';
+  const arg = contentClean.slice(prefix.length).trim();
+
+  if (!arg) {
+    const current = manager.getUserVenmoHandle(message.author.id);
+    await message.reply(
+      current
+        ? `Your Venmo handle is set to **${current}**.`
+        : "You haven't set a Venmo handle yet. Use `venmo <handle>` to set one.",
+    );
+    return;
+  }
+
+  if (arg === 'remove' || arg === 'clear') {
+    manager.setUserVenmoHandle(message.author.id, null);
+    await message.reply('Your Venmo handle has been cleared.');
+    const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
+    await updateSummaryMessage(message, refreshedSession);
+    return;
+  }
+
+  const handle = arg.replace(/^@/, '').trim();
+  if (!handle || !/^[a-zA-Z0-9_-]{1,30}$/.test(handle)) {
+    await message.reply(
+      'Please provide a valid Venmo handle (1–30 letters, numbers, underscores, or hyphens).',
+    );
+    return;
+  }
+
+  manager.setUserVenmoHandle(message.author.id, handle);
+  await message.reply(`Your Venmo handle has been set to **${handle}**.`);
+
+  const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;
+  await updateSummaryMessage(message, refreshedSession);
 }
 
 async function handleDiscountCommand(
@@ -1723,13 +1961,22 @@ async function updateSummaryMessage(message: Message, session: ReceiptSession): 
   const userTotals = manager.getUserTotals(session);
   const payments = manager.getPaymentStatuses(session.id);
   const splits = manager.getSplits(session.id);
-  const embeds = buildSummaryEmbeds(session, items, userTotals, payments, splits, displayName);
+  const primaryHandle = manager.getUserVenmoHandle(session.primaryUserId);
+  const { embeds, components } = buildSummaryEmbeds(
+    session,
+    items,
+    userTotals,
+    payments,
+    splits,
+    displayName,
+    primaryHandle,
+  );
 
   try {
     const summaryMsg = await thread.messages.fetch(session.summaryMessageId);
-    await summaryMsg.edit({ embeds });
+    await summaryMsg.edit({ embeds, components });
   } catch {
-    const newMsg = await threadSendHandler(thread, { embeds });
+    const newMsg = await threadSendHandler(thread, { embeds, components });
     manager.setSummaryMessageId(session.id, newMsg.id);
   }
 }

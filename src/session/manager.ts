@@ -1,5 +1,5 @@
 import * as store from "./store.js";
-import { ReceiptSession, LineItem, SplitEntry, UserTotal } from "../receipt/types.js";
+import { ReceiptSession, LineItem, SplitEntry, UserTotal, ReceiptCategory } from "../receipt/types.js";
 import { calculateUserTotals } from "../receipt/calculator.js";
 
 export function createReceiptSession(
@@ -71,6 +71,10 @@ export function setRestaurantName(sessionId: string, name: string): void {
   store.updateRestaurantName(sessionId, name);
 }
 
+export function setSessionCategory(sessionId: string, category: ReceiptCategory): void {
+  store.updateSessionCategory(sessionId, category);
+}
+
 export function setTip(sessionId: string, tipAmount: number): void {
   store.updateTip(sessionId, tipAmount);
 }
@@ -92,6 +96,14 @@ export function replaceSessionItems(
     taxAmount: number;
     tipAmount: number | null;
     total: number;
+    currencyCode?: string;
+    rateToUsd?: number;
+    rateDate?: string | null;
+    originalSubtotal?: number;
+    originalDiscount?: number;
+    originalTax?: number;
+    originalTip?: number | null;
+    originalTotal?: number;
   },
 ): void {
   store.replaceSessionItems(sessionId, items, totals);
@@ -103,6 +115,14 @@ export function markUserPaid(sessionId: string, userId: string): void {
 
 export function markUserUnpaid(sessionId: string, userId: string): void {
   store.markUnpaid(sessionId, userId);
+}
+
+export function getUserVenmoHandle(userId: string): string | null {
+  return store.getUserVenmoHandle(userId);
+}
+
+export function setUserVenmoHandle(userId: string, handle: string | null): void {
+  store.setUserVenmoHandle(userId, handle);
 }
 
 export function addUserToSession(sessionId: string, userId: string): void {
@@ -145,6 +165,13 @@ export function getLeaderboard(guildId: string): {
     restaurants: store.getTopRestaurants(guildId),
     users: store.getTopUsers(guildId),
   };
+}
+
+export function getMostFrequentRestaurants(
+  guildId: string,
+  limit = 10
+): { restaurantName: string; totalSpend: number; receiptCount: number }[] {
+  return store.getMostFrequentRestaurants(guildId, limit);
 }
 
 export function getFilteredLeaderboard(
