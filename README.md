@@ -14,6 +14,7 @@ A Discord bot that splits restaurant receipts among users. Post a receipt photo,
 - **Proxy users** — add placeholders for people who aren't in Discord
 - **Payment tracking** — users mark themselves paid; the bot notifies when all payments are in
 - **Leaderboard** — track top restaurants and spenders across receipts, filter by a single restaurant or a date range/window, plus per-user personal stats. Proxy users are tracked too, and merge across receipts by name
+- **Roulette** — let opted-in users randomly decide who pays the pooled bill, weighted by each person's share of the cost
 - **Concurrent receipts** — each receipt gets its own Discord thread
 - **Persistent storage** — SQLite database survives restarts
 - **Daily spend cap** — a built-in API-cost limit guards against runaway spend
@@ -168,6 +169,22 @@ sum paid          # mark all your unpaid items as paid
 
 When all items are claimed and everyone is marked paid, the bot notifies the primary user that all payments are in.
 
+### Roulette
+
+Anyone who has claimed items can opt in to a weighted roulette. The bot pools all items claimed by opted-in users, then randomly picks one of them to pay the whole pool. Each person's chance equals their share of the pooled cost.
+
+```
+roulette join       # opt in (alias: rj)
+roulette leave      # opt out (alias: rl)
+roulette            # show who has opted in
+roulette spin       # run the roulette (alias: rs)
+```
+
+- At least two users must opt in to spin.
+- Only opted-in users or the primary user can spin.
+- Items split between opted-in and opted-out users block the spin; unsplit them or have everyone on the split opt in.
+- The winner's claimed items are replaced with the entire pooled bill, and other opted-in users are removed from the receipt.
+
 ## Commands Reference
 
 Aliases are shown after the `/`. In a thread, the bot reads every reply; in a channel, mention the bot.
@@ -180,6 +197,10 @@ Aliases are shown after the `/`. In a thread, the bot reads every reply; in a ch
 | `unclaim 1 3` / `uc 1 3` | Release claimed items |
 | `split 3 5 @user1 @user2` / `s ...` | Split item(s) between mentioned users (even, or `@user 30%` for uneven; proxy names allowed) |
 | `split all` / `s all` | Split every **unclaimed** item evenly among everyone on the receipt (claimed items are left untouched — never errors on them). Exclude items and/or users after `-`: `split all - 3 5 - @alice` |
+| `roulette join` / `rj` | Opt in to the roulette pool |
+| `roulette leave` / `rl` | Leave the roulette pool |
+| `roulette spin` / `rs` | Run the roulette (opted-in users or primary user only) |
+| `roulette` / `roulette status` / `rst` | Show current roulette opt-ins |
 | `paid` / `p` | Mark yourself as paid |
 | `unpaid` / `up` | Mark yourself as unpaid |
 | `status` / `st` | Show current claim status |
