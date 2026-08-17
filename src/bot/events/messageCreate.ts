@@ -997,7 +997,20 @@ async function handleThreadMessage(message: Message, client: Client): Promise<vo
   const session = manager.getSession(thread.id);
   if (!session) return;
 
+  // Strip mentions from content so proxy commands parse cleanly
+  let contentClean = message.content
+    .replace(/<@!?\d+>/g, '')
+    .trim()
+    .toLowerCase();
+
   if (session.status === 'settled') {
+    // `nonfood` is the one command a settled receipt still accepts — otherwise a
+    // receipt that settled before anyone categorized it would be stuck on the
+    // leaderboards forever.
+    if (contentClean === 'nonfood' || contentClean === 'nf') {
+      await handleCategory(message, session, 'non_food');
+      return;
+    }
     await message.reply('This receipt has already been settled.');
     return;
   }
@@ -1006,12 +1019,6 @@ async function handleThreadMessage(message: Message, client: Client): Promise<vo
     await message.reply('This receipt has been voided — no further commands are accepted.');
     return;
   }
-
-  // Strip mentions from content so proxy commands parse cleanly
-  let contentClean = message.content
-    .replace(/<@!?\d+>/g, '')
-    .trim()
-    .toLowerCase();
 
   // Proxy-by-name via trailing `as <name>` — only primary user
   const proxyByName = resolveProxySuffix(contentClean, message, session);
@@ -1808,18 +1815,24 @@ async function handleCategory(
     return;
   }
 
-  if (session.status === 'settled') {
+  // A settled receipt can still be pulled off the leaderboards, but it can't be put
+  // back: settling is what generates the entries, and they're gone once purged.
+  if (session.status === 'settled' && category === 'food') {
     await message.reply(
-      "This receipt is already settled — its category can't be changed. Void and re-upload if needed.",
+      "This receipt is already settled — it can't be marked back as food. Void and re-upload if needed.",
     );
     return;
   }
 
-  manager.setSessionCategory(session.id, category);
+  const removedEntries = manager.setSessionCategory(session.id, category);
 
   const label = category === 'non_food' ? 'non-food' : 'food';
+  const removalNote =
+    removedEntries > 0
+      ? ' Its spend has been removed from the leaderboards.'
+      : '';
   await message.reply(
-    `This receipt is now marked as **${label}**. It ${category === 'non_food' ? 'will not' : 'will'} count toward leaderboards.`,
+    `This receipt is now marked as **${label}**. It ${category === 'non_food' ? 'will not' : 'will'} count toward leaderboards.${removalNote}`,
   );
 
   const refreshedSession = manager.getSession((message.channel as ThreadChannel).id)!;

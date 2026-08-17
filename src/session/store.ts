@@ -13,6 +13,7 @@ import {
   normalizeRestaurantName,
   displayRestaurantName,
 } from "../utils/restaurantName.js";
+import { purgeLeaderboardEntries } from "./nonFood.js";
 
 // Restaurant names live in the DB in canonical lowercase form so that
 // "Chubby Mart" and "chubby mart" are one restaurant. This module is the
@@ -390,15 +391,20 @@ export function updateSessionStatus(
   );
 }
 
+// Marking a receipt non-food also retracts anything it already contributed to the
+// leaderboards — a receipt settled first and categorized afterwards would otherwise
+// keep its restaurant and spend on every leaderboard view.
 export function updateSessionCategory(
   sessionId: string,
   category: ReceiptCategory
-): void {
+): number {
   const db = getDb();
   db.prepare("UPDATE receipt_sessions SET category = ? WHERE id = ?").run(
     category,
     sessionId
   );
+  if (category !== "non_food") return 0;
+  return purgeLeaderboardEntries(db, { sessionIds: [sessionId] });
 }
 
 export function updateSummaryMessageId(
