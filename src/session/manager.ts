@@ -71,8 +71,12 @@ export function setRestaurantName(sessionId: string, name: string): void {
   store.updateRestaurantName(sessionId, name);
 }
 
-export function setSessionCategory(sessionId: string, category: ReceiptCategory): void {
-  store.updateSessionCategory(sessionId, category);
+// Returns how many already-recorded leaderboard entries were removed (non-food only).
+export function setSessionCategory(
+  sessionId: string,
+  category: ReceiptCategory,
+): number {
+  return store.updateSessionCategory(sessionId, category);
 }
 
 export function setTip(sessionId: string, tipAmount: number): void {

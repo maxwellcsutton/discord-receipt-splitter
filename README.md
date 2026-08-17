@@ -15,7 +15,7 @@ A Discord bot that splits restaurant receipts among users. Post a receipt photo,
 - **Proxy users** — add placeholders for people who aren't in Discord
 - **Payment tracking** — users mark themselves paid; the bot notifies when all payments are in
 - **Leaderboard** — track top restaurants and spenders across receipts, filter by a single restaurant or a date range/window, plus per-user personal stats. Proxy users are tracked too, and merge across receipts by name
-- **Food / non-food categories** — receipts default to food and count toward leaderboards; the primary user can mark a receipt as non-food so it is excluded
+- **Food / non-food categories** — receipts default to food and count toward leaderboards; the primary user can mark a receipt as non-food so it is excluded, including after it has settled (its spend is removed retroactively)
 - **Roulette** — let opted-in users randomly decide who pays the pooled bill, weighted by each person's share of the cost
 - **Concurrent receipts** — each receipt gets its own Discord thread
 - **Persistent storage** — SQLite database survives restarts
@@ -242,11 +242,13 @@ The primary user is whoever posted the receipt. These manage the receipt itself.
 | `adduser @user` / `au @user` | Add a user to the receipt |
 | `addproxy Alice` / `ap Alice` | Add a placeholder for someone not in Discord |
 | `rescan <optional hint>` | Re-parse the receipt image (resets all claims/splits/payments) — see [Prompting & Accuracy](#prompting--accuracy) |
-| `nonfood` / `nf` | Mark this receipt as non-food so it won't count on leaderboards |
+| `nonfood` / `nf` | Mark this receipt as non-food so it won't count on leaderboards. Works on already-settled receipts too, and removes any spend the receipt already contributed |
 | `food` | Mark this receipt as food so it counts on leaderboards (default) |
 | `void` | Void the receipt and lock the thread |
 
 > **Acting on behalf of others:** the primary user can append `@user` to most commands (e.g. `claim 3 @alice`) or `as <proxyname>` to act for a proxy user.
+
+> **Non-food is retroactive, but one-way.** `nonfood` deletes the receipt's settlement history and subtracts it from the aggregate spend totals, so the restaurant disappears from every leaderboard, stat, and recommendation. A settled receipt therefore can't be marked back as `food` — the entries are gone. Void and re-upload if you need it counted again.
 
 ### Channel commands (mention the bot)
 
@@ -362,6 +364,7 @@ src/
     manager.ts          — Session business logic + daily spend tracking
     store.ts            — SQLite CRUD operations + daily spend cap
     migrations.ts       — Database schema
+    nonFood.ts          — Removes a receipt's leaderboard footprint (history + aggregates)
   utils/
     discord.ts          — Mention parsing, display name resolution
     restaurantName.ts   — Restaurant name canonicalization (lowercase storage, Title Case display)

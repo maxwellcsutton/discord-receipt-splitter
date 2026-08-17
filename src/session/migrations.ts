@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { config } from "../config.js";
 import { normalizeRestaurantName } from "../utils/restaurantName.js";
+import { purgeLeaderboardEntries } from "./nonFood.js";
 import path from "path";
 import fs from "fs";
 
@@ -168,93 +169,22 @@ export function initDatabase(): void {
     .get() as any;
   if (!nonFoodBackfillDone) {
     const tx = db.transaction(() => {
-      const nonFoodSessions = db
-        .prepare(
-          `SELECT id, restaurant_name FROM receipt_sessions
-           WHERE LOWER(restaurant_name) IN ('movie', 'spellground')`
-        )
-        .all() as { id: string; restaurant_name: string }[];
+      const sessionIds = (
+        db
+          .prepare(
+            `SELECT id FROM receipt_sessions
+             WHERE LOWER(restaurant_name) IN ('movie', 'spellground')`
+          )
+          .all() as { id: string }[]
+      ).map((s) => s.id);
 
-      const sessionIds = nonFoodSessions.map((s) => s.id);
-      if (sessionIds.length === 0) {
+      if (sessionIds.length > 0) {
+        purgeLeaderboardEntries(db, { sessionIds });
         db.prepare(
-          "INSERT INTO meta (key, value) VALUES ('non_food_backfill_v1', ?)"
-        ).run(new Date().toISOString());
-        return;
+          `UPDATE receipt_sessions SET category = 'non_food'
+           WHERE id IN (${sessionIds.map(() => '?').join(',')})`
+        ).run(...sessionIds);
       }
-
-      const placeholders = sessionIds.map(() => '?').join(',');
-
-      // Pull the leaderboard entries that were generated from these sessions.
-      const entriesToRemove = db
-        .prepare(
-          `SELECT settlement_id, guild_id, user_id, restaurant_name, amount
-           FROM settlement_entries
-           WHERE session_id IN (${placeholders})`
-        )
-        .all(...sessionIds) as {
-          settlement_id: string;
-          guild_id: string;
-          user_id: string;
-          restaurant_name: string;
-          amount: number;
-        }[];
-
-      // Aggregate per-user and per-restaurant adjustments before deleting entries.
-      const userAdjustments = new Map<string, number>();
-      const restaurantSpendAdjustments = new Map<string, number>();
-      const restaurantSettlementIds = new Map<string, Set<string>>();
-
-      for (const entry of entriesToRemove) {
-        const userKey = `${entry.guild_id}|${entry.user_id}`;
-        userAdjustments.set(userKey, (userAdjustments.get(userKey) || 0) + entry.amount);
-
-        const restaurantKey = `${entry.guild_id}|${entry.restaurant_name}`;
-        restaurantSpendAdjustments.set(
-          restaurantKey,
-          (restaurantSpendAdjustments.get(restaurantKey) || 0) + entry.amount
-        );
-        const ids = restaurantSettlementIds.get(restaurantKey) || new Set<string>();
-        ids.add(entry.settlement_id);
-        restaurantSettlementIds.set(restaurantKey, ids);
-      }
-
-      // Subtract from aggregated user stats.
-      for (const [key, amount] of userAdjustments) {
-        const [guildId, userId] = key.split('|');
-        db.prepare(
-          'UPDATE user_stats SET total_spend = total_spend - ? WHERE guild_id = ? AND user_id = ?'
-        ).run(amount, guildId, userId);
-        db.prepare(
-          'DELETE FROM user_stats WHERE guild_id = ? AND user_id = ? AND total_spend <= 0.005'
-        ).run(guildId, userId);
-      }
-
-      // Subtract from aggregated restaurant stats (one receipt count per settlement_id).
-      for (const [key, amount] of restaurantSpendAdjustments) {
-        const [guildId, restaurantName] = key.split('|');
-        const receiptCount = restaurantSettlementIds.get(key)?.size || 0;
-        db.prepare(
-          `UPDATE restaurant_stats
-           SET total_spend = total_spend - ?, receipt_count = receipt_count - ?
-           WHERE guild_id = ? AND restaurant_name = ?`
-        ).run(amount, receiptCount, guildId, restaurantName);
-        db.prepare(
-          `DELETE FROM restaurant_stats
-           WHERE guild_id = ? AND restaurant_name = ? AND (total_spend <= 0.005 OR receipt_count <= 0)`
-        ).run(guildId, restaurantName);
-      }
-
-      // Delete the leaderboard history for these sessions so they no longer count
-      // in any leaderboard view.
-      db.prepare(
-        `DELETE FROM settlement_entries WHERE session_id IN (${placeholders})`
-      ).run(...sessionIds);
-
-      // Mark the sessions themselves as non-food.
-      db.prepare(
-        `UPDATE receipt_sessions SET category = 'non_food' WHERE id IN (${placeholders})`
-      ).run(...sessionIds);
 
       db.prepare(
         "INSERT INTO meta (key, value) VALUES ('non_food_backfill_v1', ?)"
@@ -351,6 +281,46 @@ export function initDatabase(): void {
 
       db.prepare(
         "INSERT INTO meta (key, value) VALUES ('restaurant_name_lowercase_v1', ?)"
+      ).run(new Date().toISOString());
+    });
+    tx();
+  }
+
+  // Backfill v2: v1 missed non-food receipts three ways — it only matched the exact
+  // singular names, so "Spellgrounds" slipped past 'spellground'; it only removed
+  // entries that came from a session, so manual `addtotal` entries survived; and
+  // marking a receipt non-food after it settled never retracted the entries it had
+  // already produced. This pass purges by restaurant name *and* re-purges every session
+  // already marked non-food, so it also cleans up after any receipt categorized late.
+  // Runs after the lowercase migration so every name it compares is canonical.
+  const nonFoodBackfillV2Done = db
+    .prepare("SELECT value FROM meta WHERE key = 'non_food_backfill_v2'")
+    .get() as any;
+  if (!nonFoodBackfillV2Done) {
+    const tx = db.transaction(() => {
+      // Whole-name matches only — a place legitimately named "Spellgrounds Cafe"
+      // is not touched.
+      const nonFoodNames = ["movie", "movies", "spellground", "spellgrounds"];
+      const namePlaceholders = nonFoodNames.map(() => "?").join(",");
+
+      db.prepare(
+        `UPDATE receipt_sessions SET category = 'non_food'
+         WHERE LOWER(restaurant_name) IN (${namePlaceholders})`
+      ).run(...nonFoodNames);
+
+      const nonFoodSessionIds = (
+        db
+          .prepare("SELECT id FROM receipt_sessions WHERE category = 'non_food'")
+          .all() as { id: string }[]
+      ).map((s) => s.id);
+
+      purgeLeaderboardEntries(db, {
+        restaurantNames: nonFoodNames,
+        sessionIds: nonFoodSessionIds,
+      });
+
+      db.prepare(
+        "INSERT INTO meta (key, value) VALUES ('non_food_backfill_v2', ?)"
       ).run(new Date().toISOString());
     });
     tx();
