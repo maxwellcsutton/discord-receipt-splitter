@@ -9,6 +9,15 @@ import {
   ReceiptCategory,
 } from "../receipt/types.js";
 import { calculateUserTotals } from "../receipt/calculator.js";
+import {
+  normalizeRestaurantName,
+  displayRestaurantName,
+} from "../utils/restaurantName.js";
+
+// Restaurant names live in the DB in canonical lowercase form so that
+// "Chubby Mart" and "chubby mart" are one restaurant. This module is the
+// boundary: every write normalizes, every read returns the Title Case display
+// form, so the rest of the app only ever sees display names.
 
 // --- Sessions ---
 
@@ -34,7 +43,7 @@ export function createSession(session: ReceiptSession, items: LineItem[]): void 
       session.channelId,
       session.guildId,
       session.primaryUserId,
-      session.restaurantName,
+      normalizeRestaurantName(session.restaurantName),
       session.subtotal,
       session.discountAmount,
       session.taxAmount,
@@ -421,7 +430,7 @@ export function addTaggedUser(sessionId: string, userId: string): void {
 export function updateRestaurantName(sessionId: string, name: string): void {
   const db = getDb();
   db.prepare("UPDATE receipt_sessions SET restaurant_name = ? WHERE id = ?").run(
-    name,
+    normalizeRestaurantName(name),
     sessionId,
   );
 }
@@ -549,9 +558,10 @@ export function recordSettlement(
 
   const receiptTotal = userTotals.reduce((sum, u) => sum + u.grandTotal, 0);
   const settlementId = randomUUID();
+  const canonicalName = normalizeRestaurantName(restaurantName);
 
   const transaction = db.transaction(() => {
-    upsertRestaurant.run(guildId, restaurantName, receiptTotal);
+    upsertRestaurant.run(guildId, canonicalName, receiptTotal);
     for (const ut of userTotals) {
       if (ut.grandTotal > 0) {
         upsertUser.run(guildId, ut.userId, ut.grandTotal);
@@ -559,7 +569,7 @@ export function recordSettlement(
           settlementId,
           guildId,
           ut.userId,
-          restaurantName,
+          canonicalName,
           ut.grandTotal,
           ut.tipShare ?? 0,
           sessionId ?? null
@@ -581,7 +591,7 @@ export function getTopRestaurants(
     )
     .all(guildId, limit) as any[];
   return rows.map((r) => ({
-    restaurantName: r.restaurant_name,
+    restaurantName: displayRestaurantName(r.restaurant_name),
     totalSpend: r.total_spend,
     receiptCount: r.receipt_count,
   }));
@@ -598,7 +608,7 @@ export function getMostFrequentRestaurants(
     )
     .all(guildId, limit) as any[];
   return rows.map((r) => ({
-    restaurantName: r.restaurant_name,
+    restaurantName: displayRestaurantName(r.restaurant_name),
     totalSpend: r.total_spend,
     receiptCount: r.receipt_count,
   }));
@@ -672,7 +682,7 @@ export function getFilteredLeaderboard(
       )
       .all(guildId, ...params, limit) as any[]
   ).map((r) => ({
-    restaurantName: r.restaurant_name,
+    restaurantName: displayRestaurantName(r.restaurant_name),
     totalSpend: r.total_spend,
     receiptCount: r.receipt_count,
   }));
@@ -705,15 +715,17 @@ export function getRestaurantLeaderboard(
 } | null {
   const db = getDb();
   const { clause, params } = buildDateClause(range);
+  // Aliases resolve here too, so `leaderboard TK` finds "t kebob".
+  const canonicalName = normalizeRestaurantName(restaurantName);
 
   const summary = db
     .prepare(
       `SELECT COALESCE(SUM(amount), 0) AS total_spend,
               COUNT(DISTINCT settlement_id) AS receipt_count
        FROM settlement_entries
-       WHERE guild_id = ? AND LOWER(restaurant_name) = LOWER(?)${clause}`
+       WHERE guild_id = ? AND LOWER(restaurant_name) = ?${clause}`
     )
-    .get(guildId, restaurantName, ...params) as any;
+    .get(guildId, canonicalName, ...params) as any;
 
   if (!summary || summary.receipt_count === 0) return null;
 
@@ -724,12 +736,12 @@ export function getRestaurantLeaderboard(
                 SUM(amount) AS total_spend,
                 COUNT(DISTINCT settlement_id) AS visits
          FROM settlement_entries
-         WHERE guild_id = ? AND LOWER(restaurant_name) = LOWER(?)${clause}
+         WHERE guild_id = ? AND LOWER(restaurant_name) = ?${clause}
          GROUP BY LOWER(user_id)
          ORDER BY total_spend DESC
          LIMIT ?`
       )
-      .all(guildId, restaurantName, ...params, limit) as any[]
+      .all(guildId, canonicalName, ...params, limit) as any[]
   ).map((r) => ({
     userId: r.user_id,
     totalSpend: r.total_spend,
@@ -764,7 +776,7 @@ export function getRestaurantRecommendations(
     )
     .all(guildId, limit) as any[];
   return rows.map((r) => ({
-    restaurantName: r.restaurant_name,
+    restaurantName: displayRestaurantName(r.restaurant_name),
     visits: r.visits,
     lastVisit: r.last_visit,
     totalSpend: r.total_spend,
@@ -800,7 +812,7 @@ export function getPersonalStats(guildId: string, userId: string): PersonalStats
       )
       .all(guildId, userId) as any[]
   ).map((r) => ({
-    restaurantName: r.restaurant_name,
+    restaurantName: displayRestaurantName(r.restaurant_name),
     totalSpend: r.total_spend,
     visits: r.visits,
   }));
@@ -816,7 +828,7 @@ export function getPersonalStats(guildId: string, userId: string): PersonalStats
       )
       .all(guildId, userId) as any[]
   ).map((r) => ({
-    restaurantName: r.restaurant_name,
+    restaurantName: displayRestaurantName(r.restaurant_name),
     amount: r.amount,
     settledAt: r.settled_at,
   }));
@@ -905,7 +917,7 @@ export function backfillSettlementEntries(): void {
             settlementId,
             session.guildId,
             ut.userId,
-            session.restaurantName,
+            normalizeRestaurantName(session.restaurantName),
             ut.grandTotal,
             ut.tipShare,
             session.id,
@@ -1048,7 +1060,7 @@ function rowToSession(row: any): ReceiptSession {
     channelId: row.channel_id,
     guildId: row.guild_id,
     primaryUserId: row.primary_user_id,
-    restaurantName: row.restaurant_name,
+    restaurantName: displayRestaurantName(row.restaurant_name),
     subtotal: row.subtotal,
     discountAmount: row.discount_amount ?? 0,
     taxAmount: row.tax_amount,

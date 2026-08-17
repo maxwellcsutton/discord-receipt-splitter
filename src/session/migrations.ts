@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { config } from "../config.js";
+import { normalizeRestaurantName } from "../utils/restaurantName.js";
 import path from "path";
 import fs from "fs";
 
@@ -279,4 +280,79 @@ export function initDatabase(): void {
   addCurrencyCol("original_tax", "REAL NOT NULL DEFAULT 0");
   addCurrencyCol("original_tip", "REAL");
   addCurrencyCol("original_total", "REAL NOT NULL DEFAULT 0");
+
+  // Migration: canonicalize stored restaurant names to lowercase (with aliases
+  // resolved) so differently-cased spellings of the same place — "Chubby Mart"
+  // and "chubby mart" — merge into one restaurant everywhere. Display casing is
+  // applied when names are read back out; see utils/restaurantName.ts.
+  const nameCaseBackfillDone = db
+    .prepare("SELECT value FROM meta WHERE key = 'restaurant_name_lowercase_v1'")
+    .get() as any;
+  if (!nameCaseBackfillDone) {
+    const tx = db.transaction(() => {
+      // receipt_sessions and settlement_entries have no uniqueness constraint on
+      // the name, so a plain rewrite per distinct name is enough.
+      for (const table of ["receipt_sessions", "settlement_entries"]) {
+        const names = db
+          .prepare(`SELECT DISTINCT restaurant_name FROM ${table}`)
+          .all() as { restaurant_name: string }[];
+        const update = db.prepare(
+          `UPDATE ${table} SET restaurant_name = ? WHERE restaurant_name = ?`
+        );
+        for (const { restaurant_name } of names) {
+          const canonical = normalizeRestaurantName(restaurant_name);
+          if (canonical !== restaurant_name) update.run(canonical, restaurant_name);
+        }
+      }
+
+      // restaurant_stats is keyed on (guild_id, restaurant_name), so rows that
+      // collapse onto the same canonical name must be summed rather than
+      // overwritten. Rebuild the table from the merged totals.
+      const stats = db
+        .prepare(
+          "SELECT guild_id, restaurant_name, total_spend, receipt_count FROM restaurant_stats"
+        )
+        .all() as {
+          guild_id: string;
+          restaurant_name: string;
+          total_spend: number;
+          receipt_count: number;
+        }[];
+
+      const merged = new Map<
+        string,
+        { guildId: string; name: string; totalSpend: number; receiptCount: number }
+      >();
+      for (const row of stats) {
+        const canonical = normalizeRestaurantName(row.restaurant_name);
+        const key = `${row.guild_id} ${canonical}`;
+        const existing = merged.get(key);
+        if (existing) {
+          existing.totalSpend += row.total_spend;
+          existing.receiptCount += row.receipt_count;
+        } else {
+          merged.set(key, {
+            guildId: row.guild_id,
+            name: canonical,
+            totalSpend: row.total_spend,
+            receiptCount: row.receipt_count,
+          });
+        }
+      }
+
+      db.prepare("DELETE FROM restaurant_stats").run();
+      const insertStat = db.prepare(
+        `INSERT INTO restaurant_stats (guild_id, restaurant_name, total_spend, receipt_count)
+         VALUES (?, ?, ?, ?)`
+      );
+      for (const row of merged.values()) {
+        insertStat.run(row.guildId, row.name, row.totalSpend, row.receiptCount);
+      }
+
+      db.prepare(
+        "INSERT INTO meta (key, value) VALUES ('restaurant_name_lowercase_v1', ?)"
+      ).run(new Date().toISOString());
+    });
+    tx();
+  }
 }

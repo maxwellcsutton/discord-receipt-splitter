@@ -129,6 +129,18 @@ In a channel where the bot can post, send a message with:
 
 The bot will create a thread, parse the receipt, and post numbered line items with a command reference.
 
+### Restaurant Names
+
+Restaurant names are case-insensitive: `Chubby Mart`, `chubby mart`, and `CHUBBY MART` are all the same restaurant on leaderboards, stats, and recommendations. Names are stored lowercase and shown in Title Case, so the casing you type never splits a restaurant in two.
+
+Special cases live in [`src/utils/restaurantName.ts`](src/utils/restaurantName.ts):
+
+- **Aliases** — `tk` / `tkebab` / `t kebab` → **T Kebob**, `snd` → **SunNongDan**, `chubby` → **Chubby Cattle**. Aliases match the whole name only, so "Chubby Mart" is left alone.
+- **Display casing** — acronyms and names whose real casing isn't Title Case keep it: **BCD**, **BBQ**, **KBBQ**, **IHOP**, **SunNongDan**. Add your own to `WORD_DISPLAY_OVERRIDES` (single words) or `NAME_DISPLAY_OVERRIDES` (whole names).
+- Minor words stay lowercase mid-name (**House of Pies**), and hyphenated names capitalize each part (**Chick-Fil-A**).
+
+Existing databases are migrated automatically on startup: stored names are lowercased and rows that collapse onto the same name (`Chubby Mart` + `chubby mart`) have their spend and receipt counts merged. The migration runs once, guarded by the `restaurant_name_lowercase_v1` key in the `meta` table.
+
 ### Claiming Items
 
 Reply in the receipt thread with item numbers (the `claim`/`c` keyword is optional for bare numbers):
@@ -352,6 +364,7 @@ src/
     migrations.ts       — Database schema
   utils/
     discord.ts          — Mention parsing, display name resolution
+    restaurantName.ts   — Restaurant name canonicalization (lowercase storage, Title Case display)
 ```
 
 ## How Tax and Tip Are Calculated

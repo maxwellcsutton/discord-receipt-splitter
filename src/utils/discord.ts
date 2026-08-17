@@ -11,31 +11,17 @@ export function parseItemNumbers(text: string): number[] {
   return numbers.sort((a, b) => a - b);
 }
 
-// Maps normalized aliases to canonical restaurant names.
-// Keys must be lowercase for case-insensitive matching.
-const RESTAURANT_ALIASES: Record<string, string> = {
-  // T Kebob
-  tk: 'T Kebob',
-  tkebab: 'T Kebob',
-  't kebab': 'T Kebob',
-  't kebob': 'T Kebob',
-  // SunNongDan
-  snd: 'SunNongDan',
-  // BCD
-  bcd: 'BCD',
-  // Chubby Cattle
-  chubby: 'Chubby Cattle',
-  'chubby cattle': 'Chubby Cattle',
-};
+import { displayRestaurantName } from './restaurantName.js';
 
+// Returns the display (Title Case) form of the name, with aliases resolved.
+// The store normalizes it back to lowercase on write — see utils/restaurantName.ts.
 export function extractRestaurantName(content: string, botId: string): string {
   // Remove user, role, and channel mentions and trim
   const name = content.replace(/<[@#][!&]?\d+>/g, '').trim();
 
   if (!name) return 'Receipt';
 
-  const canonical = RESTAURANT_ALIASES[name.toLowerCase()];
-  return canonical ?? name;
+  return displayRestaurantName(name);
 }
 
 import { Attachment, Guild } from 'discord.js';
