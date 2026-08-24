@@ -39,9 +39,6 @@ export const config = {
     .filter((p) => p.length > 0),
   // Max estimated Anthropic spend per UTC day before scans are blocked.
   dailySpendLimitUsd: positiveFloat("DAILY_SPEND_LIMIT_USD", DEFAULT_DAILY_SPEND_LIMIT_USD),
-  // When true, receipt summaries can show "Pay with Venmo" buttons for users
-  // who have set a Venmo handle.
-  venmoEnabled: boolean("VENMO_ENABLED", false),
   // Exchange-rate API URL. Defaults to frankfurter.app (free, no key).
   // Templates: {from} = source currency, {to} = USD, {apikey} = EXCHANGE_RATE_API_KEY.
   exchangeRateApiUrl: process.env.EXCHANGE_RATE_API_URL || "",

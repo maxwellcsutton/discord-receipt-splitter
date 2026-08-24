@@ -1913,11 +1913,6 @@ async function handleVenmo(
   session: ReceiptSession,
   contentClean: string,
 ): Promise<void> {
-  if (!config.venmoEnabled) {
-    await message.reply('Venmo buttons are not enabled on this bot.');
-    return;
-  }
-
   const prefix = contentClean.startsWith('venmo') ? 'venmo' : 'v';
   const arg = contentClean.slice(prefix.length).trim();
 

@@ -87,7 +87,6 @@ DATABASE_PATH=./data/receipts.db
 | `DATABASE_PATH` | No | `./data/receipts.db` | SQLite database file path |
 | `MODIFIER_PREFIXES` | No | `add ,extra ,w/ ,with ` | Comma-separated prefixes that mark a line as a modifier/add-on to roll into its parent item |
 | `DAILY_SPEND_LIMIT_USD` | No | `0.10` | Max estimated Anthropic spend per UTC day before scans are blocked |
-| `VENMO_ENABLED` | No | `false` | Enable "Pay with Venmo" buttons on receipt summaries (the receipt poster must set a Venmo handle; everyone else gets a button to pay them) |
 | `EXCHANGE_RATE_API_URL` | No | `https://api.frankfurter.app/latest` | Exchange-rate service URL. Use `{from}`, `{to}`, and `{apikey}` placeholders if needed |
 | `EXCHANGE_RATE_API_KEY` | No | — | API key for the exchange-rate service, if required by your chosen provider |
 | `PORT` | No | `3000` | Port for the health-check HTTP server (used by hosting platforms) |

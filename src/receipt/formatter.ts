@@ -4,7 +4,6 @@ import {
   ButtonBuilder,
   ButtonStyle,
 } from "discord.js";
-import { config } from "../config.js";
 import { ReceiptSession, LineItem, UserTotal, SplitEntry } from "./types.js";
 import { DisplayNameResolver, isProxyUserId } from "../utils/discord.js";
 import { formatOriginalCurrency } from "./currency.js";
@@ -63,7 +62,7 @@ function shouldShowVenmoButton(
   paid: boolean,
   primaryVenmoHandle: string | null,
 ): boolean {
-  if (!config.venmoEnabled || !primaryVenmoHandle) return false;
+  if (!primaryVenmoHandle) return false;
   if (userId === session.primaryUserId) return false;
   if (isProxyUserId(userId)) return false;
   if (grandTotal <= 0) return false;
