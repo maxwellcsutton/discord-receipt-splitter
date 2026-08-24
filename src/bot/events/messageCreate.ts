@@ -23,6 +23,7 @@ import {
   buildSummaryEmbeds,
   buildUserEmbed,
   buildUserVenmoButton,
+  buildVenmoPayNote,
   formatItemList,
   formatThreadHelp,
   formatChannelHelp,
@@ -1225,12 +1226,13 @@ async function handleClaim(
     const payments = manager.getPaymentStatuses(refreshedSession.id);
     const splits = manager.getSplits(refreshedSession.id);
     const paid = payments.find((p) => p.userId === targetUserId)?.paid ?? false;
-    const embed = buildUserEmbed(ut, paid, splits, refreshedSession, displayName);
-    embed.setDescription("Reply `paid` / `p` when you've paid.");
     const primaryHandle = manager.getUserVenmoHandle(refreshedSession.primaryUserId);
+    const embed = buildUserEmbed(ut, paid, splits, refreshedSession, displayName, primaryHandle);
+    embed.setDescription("Reply `paid` / `p` when you've paid.");
+    const venmoNote = buildVenmoPayNote(refreshedSession, ut, paid, primaryHandle, displayName);
     const venmoButton = buildUserVenmoButton(refreshedSession, ut, paid, primaryHandle, displayName);
     const components = venmoButton ? [new ActionRowBuilder<ButtonBuilder>().addComponents(venmoButton)] : [];
-    await message.reply({ embeds: [embed], components });
+    await message.reply({ content: venmoNote ?? undefined, embeds: [embed], components });
   }
 
   await updateSummaryMessage(message, refreshedSession);

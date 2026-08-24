@@ -86,6 +86,21 @@ export function buildUserVenmoButton(
   return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(url);
 }
 
+export function buildVenmoPayNote(
+  session: ReceiptSession,
+  ut: UserTotal,
+  paid: boolean,
+  primaryVenmoHandle: string | null,
+  displayName: DisplayNameResolver,
+): string | null {
+  if (!primaryVenmoHandle) return null;
+  if (!shouldShowVenmoButton(session, ut.userId, ut.grandTotal, paid, primaryVenmoHandle)) {
+    return null;
+  }
+  const url = buildVenmoUrl(primaryVenmoHandle, ut.grandTotal, session.restaurantName);
+  return `💸 Pay ${displayName(session.primaryUserId)} $${ut.grandTotal.toFixed(2)} via Venmo: ${url}`;
+}
+
 export function buildSummaryVenmoComponents(
   session: ReceiptSession,
   userTotals: UserTotal[],
@@ -118,6 +133,7 @@ export function buildUserEmbed(
   splits: SplitEntry[],
   session: ReceiptSession,
   displayName: DisplayNameResolver,
+  primaryVenmoHandle: string | null = null,
 ): EmbedBuilder {
   const splitMap = buildSplitMap(splits);
   const name = displayName(ut.userId);
@@ -157,6 +173,11 @@ export function buildUserEmbed(
     : "Tip: not set";
   const footerText = `Items: $${ut.itemsTotal.toFixed(2)} | Tax: $${ut.taxShare.toFixed(2)} | ${tipStr} | Total: $${ut.grandTotal.toFixed(2)}`;
   embed.setFooter({ text: footerText });
+
+  const venmoNote = buildVenmoPayNote(session, ut, paid, primaryVenmoHandle, displayName);
+  if (venmoNote) {
+    embed.addFields({ name: "Venmo", value: venmoNote, inline: false });
+  }
 
   return embed;
 }
@@ -222,7 +243,7 @@ export function buildSummaryEmbeds(
   // One embed per user in the claimed list
   for (const ut of userTotals) {
     const paid = paymentMap.get(ut.userId) ?? false;
-    embeds.push(buildUserEmbed(ut, paid, splits, session, displayName));
+    embeds.push(buildUserEmbed(ut, paid, splits, session, displayName, primaryVenmoHandle));
   }
 
   const components = buildSummaryVenmoComponents(
