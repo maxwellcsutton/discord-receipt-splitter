@@ -256,6 +256,7 @@ The primary user is whoever posted the receipt. These manage the receipt itself.
 | `@bot <image> @user1 @user2 [restaurant]` | Start a new receipt split |
 | `@bot sum` / `@bot sum paid` | Show/settle your unpaid totals across all receipts |
 | `@bot recent [n]` (or bare `@bot 10`) | List your last _n_ uploaded receipts (default 10, max 25) with status — 🟢 Open / ✅ Closed / 🚫 Voided |
+| `@bot recentpaid [n]` | List your last _n_ settled payments (default 5, max 25) — restaurant, amount, and date |
 | `@bot open` | List all your open (unsettled) receipts |
 | `@bot leaderboard` | Show top restaurants and spenders (all-time) |
 | `@bot leaderboard <restaurant>` | Per-restaurant leaderboard: total spend, receipt count, and top spenders at that restaurant (e.g. `leaderboard TK`) |

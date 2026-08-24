@@ -238,6 +238,14 @@ export function getRecentSessionsForUser(
   return store.getRecentSessionsForUser(guildId, userId, limit);
 }
 
+export function getRecentPaymentsForUser(
+  guildId: string,
+  userId: string,
+  limit: number
+): store.RecentPayment[] {
+  return store.getRecentPaymentsForUser(guildId, userId, limit);
+}
+
 export function getOpenSessionsForUser(
   guildId: string,
   userId: string

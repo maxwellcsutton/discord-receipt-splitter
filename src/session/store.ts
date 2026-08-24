@@ -887,6 +887,37 @@ export function getPersonalStats(guildId: string, userId: string): PersonalStats
   };
 }
 
+export interface RecentPayment {
+  restaurantName: string;
+  amount: number;
+  settledAt: string;
+  sessionId: string | null;
+}
+
+// A user's most recently settled payments, newest first.
+export function getRecentPaymentsForUser(
+  guildId: string,
+  userId: string,
+  limit: number
+): RecentPayment[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT restaurant_name, amount, settled_at, session_id
+       FROM settlement_entries
+       WHERE guild_id = ? AND user_id = ?
+       ORDER BY settled_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(guildId, userId, limit) as any[];
+  return rows.map((r) => ({
+    restaurantName: displayRestaurantName(r.restaurant_name),
+    amount: r.amount,
+    settledAt: r.settled_at,
+    sessionId: r.session_id,
+  }));
+}
+
 // --- Backfill ---
 
 // One-time backfill of settlement_entries from already-settled receipt sessions,

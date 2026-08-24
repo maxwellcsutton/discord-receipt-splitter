@@ -316,6 +316,7 @@ export function formatChannelHelp(): string {
     "`@bot sum` — show your unpaid totals across all receipts",
     "`@bot sum paid` — mark all your unpaid items as paid",
     "`@bot recent [n]` (or just `@bot 10`) — your last n uploaded receipts and their status",
+    "`@bot recentpaid [n]` — your last n settled payments (default 5, max 25)",
     "`@bot open` — all your open (unsettled) receipts",
     "`@bot leaderboard` — show the top restaurants and spenders",
     "`@bot leaderboard <restaurant>` — top spenders at one restaurant (e.g. `leaderboard TK`)",

@@ -182,6 +182,10 @@ export function registerMessageCreateEvent(client: Client): void {
         await handleRecentReceipts(message, cleaned);
         return;
       }
+      if (!hasImage && /^recentpaid\b/.test(cleaned)) {
+        await handleRecentPaid(message, cleaned);
+        return;
+      }
 
       // Sum command (check "sum paid" before "sum")
       if (content.includes('sum paid')) {
@@ -714,6 +718,38 @@ async function handleRecentReceipts(message: Message, cleaned: string): Promise<
   const embed = new EmbedBuilder()
     .setTitle(`📋 Your Last ${sessions.length} Receipt${sessions.length !== 1 ? 's' : ''}`)
     .setColor(0x3498db)
+    .setDescription(lines.join('\n'));
+
+  await message.reply({ embeds: [embed] });
+}
+
+async function handleRecentPaid(message: Message, cleaned: string): Promise<void> {
+  if (!message.guildId || !message.guild) {
+    await message.reply('This command is only available in servers.');
+    return;
+  }
+
+  let limit = 5;
+  const numMatch = cleaned.match(/\d+/);
+  if (numMatch) {
+    const parsed = parseInt(numMatch[0], 10);
+    if (!isNaN(parsed) && parsed > 0) limit = Math.min(parsed, 25);
+  }
+
+  const payments = manager.getRecentPaymentsForUser(message.guildId, message.author.id, limit);
+  if (payments.length === 0) {
+    await message.reply("You haven't paid for anything in this server yet.");
+    return;
+  }
+
+  const lines = payments.map((p) => {
+    const date = p.settledAt.slice(0, 10);
+    return `💸 **${p.restaurantName}** — $${p.amount.toFixed(2)} · ${date}`;
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle(`💸 Your Last ${payments.length} Payment${payments.length !== 1 ? 's' : ''}`)
+    .setColor(0x9b59b6)
     .setDescription(lines.join('\n'));
 
   await message.reply({ embeds: [embed] });
