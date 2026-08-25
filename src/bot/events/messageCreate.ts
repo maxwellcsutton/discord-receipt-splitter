@@ -1123,7 +1123,7 @@ async function handleThreadMessage(message: Message, client: Client): Promise<vo
   }
 
   if (contentClean === 'help' || contentClean === 'h') {
-    await message.reply(formatThreadHelp());
+    await message.reply({ embeds: [formatThreadHelp()] });
     return;
   }
 

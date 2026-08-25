@@ -273,9 +273,8 @@ export function formatItemList(taggedUserIds: string[]): string {
   return `${header}\n\nReply with the item numbers you want to claim.\n\n${commands}`;
 }
 
-export function formatThreadHelp(): string {
-  return [
-    "**Receipt thread commands:**",
+export function formatThreadHelp(): EmbedBuilder {
+  const lines = [
     "`claim 1 3 5` / `c 1 3 5` — claim items by number",
     "`unclaim 1 3` / `uc 1 3` — release claimed items",
     "`split 3 5 @user1 @user2` / `s 3 5 @user1 @user2` — split one or more items evenly between the mentioned users (you are NOT auto-included — @ yourself if you want a share)",
@@ -305,7 +304,11 @@ export function formatThreadHelp(): string {
     "`food` — mark this receipt as food so it will count on leaderboards (primary user only)",
     "`void` — void this receipt and lock the thread (primary user only)",
     "_(Primary user: add `@user` to any command to act on their behalf, or `as <proxyname>` for a proxy user)_",
-  ].join("\n");
+  ];
+
+  return new EmbedBuilder()
+    .setTitle("Receipt thread commands")
+    .setDescription(lines.join("\n"));
 }
 
 export function formatChannelHelp(): string {
