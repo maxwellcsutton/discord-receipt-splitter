@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { fetchWithTimeout } from "../utils/http.js";
 
 const rateCache = new Map<string, { rate: number; date: string | null; fetchedAt: number }>();
 const CACHE_TTL_MS = 1000 * 60 * 60; // 1 hour
@@ -74,7 +75,7 @@ export async function getUsdExchangeRate(fromCurrency: string): Promise<{
     finalUrl.searchParams.set("to", "USD");
   }
 
-  const res = await fetch(finalUrl.toString());
+  const res = await fetchWithTimeout(finalUrl.toString());
   if (!res.ok) {
     throw new Error(
       `Exchange rate lookup failed for ${code}: ${res.status} ${res.statusText}`
