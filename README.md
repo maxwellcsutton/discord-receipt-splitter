@@ -366,9 +366,31 @@ src/
     migrations.ts       — Database schema
     nonFood.ts          — Removes a receipt's leaderboard footprint (history + aggregates)
   utils/
-    discord.ts          — Mention parsing, display name resolution
+    discord.ts          — Mention parsing, display name resolution, non-blocking reactions
+    http.ts             — fetch() wrapper with a hard timeout
     restaurantName.ts   — Restaurant name canonicalization (lowercase storage, Title Case display)
 ```
+
+## Reliability: timeouts and progress reactions
+
+Every network call the bot makes is bounded, and none of them are cosmetic-blocking:
+
+- **Outbound HTTP** (attachment downloads, exchange rates, Yelp) goes through
+  `fetchWithTimeout()` in `src/utils/http.ts`, which aborts after 30s. Node's global
+  `fetch` has no default timeout, so an unbounded call can hang a Discord event
+  handler forever — with no error, no reply, and nothing in the logs.
+- **Anthropic requests** use the SDK's own `timeout` (120s for receipt scans, 60s for
+  recommendations) with 2 retries.
+- **Progress reactions** (⏳ while scanning, ✅ when done) are fire-and-forget. Discord's
+  per-user reaction sublimit returns `429`s on this route, and a stalled reaction request
+  previously blocked the entire receipt pipeline because it was `await`ed before any
+  parsing work. Reactions now run detached via `addReaction()` / `replaceReaction()` /
+  `clearReactions()` in `src/utils/discord.ts`: failures are logged and swallowed, and
+  ops are chained per message so ⏳ → ✅ still applies in order. A missing reaction never
+  means a receipt failed to parse.
+
+Receipt scans log a line on start, success (with duration, item count, and estimated
+cost), and failure, so a stall is visible in `railway logs` rather than silent.
 
 ## How Tax and Tip Are Calculated
 

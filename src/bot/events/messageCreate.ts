@@ -34,12 +34,16 @@ import {
   parseItemNumbers,
   extractRestaurantName,
   getImageMediaType,
+  addReaction,
+  replaceReaction,
+  clearReactions,
   buildDisplayNameResolver,
   DisplayNameResolver,
   isProxyUserId,
   makeProxyUserId,
   proxyDisplayName,
 } from '../../utils/discord.js';
+import { fetchWithTimeout } from '../../utils/http.js';
 import { ReceiptSession, UserTotal } from '../../receipt/types.js';
 
 export function hasEmbeds(
@@ -922,9 +926,12 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
 
   const restaurantName = extractRestaurantName(message.content, client.user!.id);
 
-  await message.react('⏳');
+  addReaction(message, '⏳');
 
-  const response = await fetch(attachment.url);
+  console.log(`Scanning receipt for "${restaurantName}" (message ${message.id})`);
+  const startedAt = Date.now();
+
+  const response = await fetchWithTimeout(attachment.url);
   const buffer = Buffer.from(await response.arrayBuffer());
   const imageBase64 = buffer.toString('base64');
 
@@ -934,7 +941,8 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
   } catch (err) {
     const cost = (err as any).estimatedCostUsd;
     if (typeof cost === "number") manager.logApiCost(cost);
-    await message.reactions.removeAll().catch(() => {});
+    console.error(`Receipt scan failed (message ${message.id}):`, err);
+    clearReactions(message);
     const reason = err instanceof Error ? err.message : String(err);
     await message.reply(
       `⚠️ Couldn't read this receipt: ${reason}`
@@ -942,6 +950,10 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
     return;
   }
   manager.logApiCost(result.estimatedCostUsd);
+  console.log(
+    `Receipt scan succeeded (message ${message.id}) in ${Date.now() - startedAt}ms, ` +
+      `${result.items.length} items, est. $${result.estimatedCostUsd.toFixed(4)}`,
+  );
 
   const parsed = result.parsed;
   const allItems = result.items;
@@ -1025,8 +1037,7 @@ async function handleNewReceipt(message: Message, client: Client): Promise<void>
     );
   }
 
-  await message.reactions.removeAll().catch(() => {});
-  await message.react('✅');
+  replaceReaction(message, '✅');
 }
 
 async function handleThreadMessage(message: Message, client: Client): Promise<void> {
@@ -1764,9 +1775,12 @@ async function handleRescan(
   }
 
   manager.checkDailyLimit();
-  await message.react('⏳');
+  addReaction(message, '⏳');
 
-  const response = await fetch(attachment.url);
+  console.log(`Re-scanning receipt for session ${session.id} (message ${message.id})`);
+  const startedAt = Date.now();
+
+  const response = await fetchWithTimeout(attachment.url);
   const buffer = Buffer.from(await response.arrayBuffer());
   const imageBase64 = buffer.toString('base64');
 
@@ -1776,7 +1790,8 @@ async function handleRescan(
   } catch (err) {
     const cost = (err as any).estimatedCostUsd;
     if (typeof cost === "number") manager.logApiCost(cost);
-    await message.reactions.removeAll().catch(() => {});
+    console.error(`Receipt re-scan failed (message ${message.id}):`, err);
+    clearReactions(message);
     const reason = err instanceof Error ? err.message : String(err);
     await message.reply(
       `⚠️ Couldn't re-scan this receipt: ${reason}`
@@ -1784,6 +1799,10 @@ async function handleRescan(
     return;
   }
   manager.logApiCost(result.estimatedCostUsd);
+  console.log(
+    `Receipt re-scan succeeded (message ${message.id}) in ${Date.now() - startedAt}ms, ` +
+      `${result.items.length} items, est. $${result.estimatedCostUsd.toFixed(4)}`,
+  );
 
   const parsed = result.parsed;
   const allItems = result.items;
@@ -1810,7 +1829,7 @@ async function handleRescan(
   // A rescan resets claims/splits/payments; opt-ins must be re-confirmed too.
   manager.clearRouletteOptIns(session.id);
 
-  await message.reactions.removeAll().catch(() => {});
+  clearReactions(message);
   await message.reply(
     `🔄 Receipt re-scanned${hint ? ` with hint: _${hint}_` : ''}. All previous claims, splits, payment statuses, and roulette opt-ins were reset. Please double-check the values below.`,
   );

@@ -1,7 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
+import { fetchWithTimeout } from "../utils/http.js";
 
-const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+const anthropic = new Anthropic({
+  apiKey: config.anthropicApiKey,
+  timeout: 60_000,
+  maxRetries: 2,
+});
 const YELP_SEARCH_URL = "https://api.yelp.com/v3/businesses/search";
 
 // Lightweight text model for the classification step (cuisines + timezone).
@@ -196,7 +201,7 @@ async function yelpSearch(
     params.set("open_at", String(openAt));
   }
 
-  const response = await fetch(`${YELP_SEARCH_URL}?${params.toString()}`, {
+  const response = await fetchWithTimeout(`${YELP_SEARCH_URL}?${params.toString()}`, {
     headers: {
       Authorization: `Bearer ${config.yelpApiKey}`,
       Accept: "application/json",

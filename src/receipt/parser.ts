@@ -3,7 +3,16 @@ import { config } from "../config.js";
 import { ParsedReceipt, LineItem } from "./types.js";
 import { convertToUsd } from "./currency.js";
 
-const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+// A vision scan of a dense receipt takes well under a minute; anything past two
+// is a stall, not slow work. Bound it explicitly so a hung request surfaces as
+// an error the user sees rather than a receipt that silently never resolves.
+const REQUEST_TIMEOUT_MS = 120_000;
+
+const anthropic = new Anthropic({
+  apiKey: config.anthropicApiKey,
+  timeout: REQUEST_TIMEOUT_MS,
+  maxRetries: 2,
+});
 
 // CLAUDE_MODEL accepts a short alias (`haiku` | `sonnet` | `opus`) or a full
 // model id. Aliases also carry the right per-MTok pricing so daily-spend
