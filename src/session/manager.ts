@@ -207,6 +207,22 @@ export function getPersonalStats(
   return store.getPersonalStats(guildId, userId);
 }
 
+export function setRating(
+  guildId: string,
+  restaurantName: string,
+  userId: string,
+  rating: number
+): void {
+  store.setRestaurantRating(guildId, restaurantName, userId, rating);
+}
+
+export function getRatings(
+  guildId: string,
+  restaurantName: string
+): { average: number; ratings: { userId: string; rating: number }[] } | null {
+  return store.getRestaurantRatings(guildId, restaurantName);
+}
+
 export function getRecommendations(
   guildId: string,
   limit: number

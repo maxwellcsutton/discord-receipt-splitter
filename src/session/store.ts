@@ -761,6 +761,48 @@ export function getRestaurantLeaderboard(
   };
 }
 
+// --- Restaurant ratings ---
+
+// One rating per user per restaurant per guild; re-rating overwrites.
+export function setRestaurantRating(
+  guildId: string,
+  restaurantName: string,
+  userId: string,
+  rating: number
+): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO restaurant_ratings (guild_id, restaurant_name, user_id, rating)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(guild_id, restaurant_name, user_id) DO UPDATE SET
+      rating = excluded.rating,
+      rated_at = datetime('now')
+  `).run(guildId, normalizeRestaurantName(restaurantName), userId, rating);
+}
+
+export function getRestaurantRatings(
+  guildId: string,
+  restaurantName: string
+): { average: number; ratings: { userId: string; rating: number }[] } | null {
+  const db = getDb();
+  const canonicalName = normalizeRestaurantName(restaurantName);
+
+  const rows = db
+    .prepare(
+      `SELECT user_id, rating
+       FROM restaurant_ratings
+       WHERE guild_id = ? AND LOWER(restaurant_name) = ?
+       ORDER BY rating DESC, rated_at ASC`
+    )
+    .all(guildId, canonicalName) as any[];
+
+  if (rows.length === 0) return null;
+
+  const ratings = rows.map((r) => ({ userId: r.user_id, rating: r.rating }));
+  const average = ratings.reduce((sum, r) => sum + r.rating, 0) / ratings.length;
+  return { average, ratings };
+}
+
 // --- Recommendations ---
 
 export function getRestaurantRecommendations(

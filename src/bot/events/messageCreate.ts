@@ -191,6 +191,16 @@ export function registerMessageCreateEvent(client: Client): void {
         return;
       }
 
+      // Rating commands ("rating" before "rate" — the former contains the latter)
+      if (!hasImage && /^rating\b/.test(cleaned)) {
+        await handleRating(message);
+        return;
+      }
+      if (!hasImage && /^rate\b/.test(cleaned)) {
+        await handleRate(message);
+        return;
+      }
+
       // Sum command (check "sum paid" before "sum")
       if (content.includes('sum paid')) {
         await handleSum(message, client, true);
@@ -677,6 +687,76 @@ async function handleRecommend(message: Message): Promise<void> {
     .setTitle(`🍽️ ${recommendations.length} Place${recommendations.length !== 1 ? 's' : ''} to Eat`)
     .setColor(0x2ecc71)
     .setDescription(lines.join('\n'));
+
+  await message.reply({ embeds: [embed] });
+}
+
+async function handleRate(message: Message): Promise<void> {
+  if (!message.guildId || !message.guild) {
+    await message.reply('This command is only available in servers.');
+    return;
+  }
+
+  const stripped = message.content.replace(/<@!?\d+>/g, ' ');
+  const match = stripped.match(/rate\s+(.*?)\s+(\d+(?:\.\d+)?)\s*$/is);
+  if (!match || !match[1].trim()) {
+    await message.reply('Usage: `@bot rate <restaurant> <0-10>` (e.g. `rate TK 8.5`)');
+    return;
+  }
+
+  const rating = parseFloat(match[2]);
+  if (rating < 0 || rating > 10) {
+    await message.reply('Rating must be between 0 and 10.');
+    return;
+  }
+
+  const restaurantName = extractRestaurantName(match[1], '');
+  manager.setRating(message.guildId, restaurantName, message.author.id, rating);
+
+  const displayName = await buildDisplayNameResolver(message.guild, [message.author.id]);
+  await message.reply(
+    `⭐ **${displayName(message.author.id)}** rated **${restaurantName}** ${rating}/10`,
+  );
+}
+
+async function handleRating(message: Message): Promise<void> {
+  if (!message.guildId || !message.guild) {
+    await message.reply('This command is only available in servers.');
+    return;
+  }
+
+  const stripped = message.content.replace(/<@!?\d+>/g, ' ');
+  const match = stripped.match(/rating\s+(.*)/is);
+  const restaurantRaw = (match?.[1] ?? '').trim();
+  if (!restaurantRaw) {
+    await message.reply('Usage: `@bot rating <restaurant>` (e.g. `rating TK`)');
+    return;
+  }
+  const restaurantName = extractRestaurantName(restaurantRaw, '');
+
+  const data = manager.getRatings(message.guildId, restaurantName);
+  if (!data) {
+    await message.reply(
+      `No ratings for **${restaurantName}** yet — be the first with \`@bot rate ${restaurantName} <0-10>\``,
+    );
+    return;
+  }
+
+  const displayName = await buildDisplayNameResolver(
+    message.guild,
+    data.ratings.map((r) => r.userId),
+  );
+  const lines = data.ratings.map(
+    (r, i) => `${i + 1}. **${displayName(r.userId)}** — ${r.rating}/10`,
+  );
+
+  const embed = new EmbedBuilder()
+    .setTitle(`⭐ ${restaurantName} Rating`)
+    .setColor(0x9b59b6)
+    .setDescription(
+      `**Average:** ${data.average.toFixed(1)}/10 across ${data.ratings.length} rating${data.ratings.length !== 1 ? 's' : ''}`,
+    )
+    .addFields({ name: 'Ratings', value: lines.join('\n'), inline: false });
 
   await message.reply({ embeds: [embed] });
 }

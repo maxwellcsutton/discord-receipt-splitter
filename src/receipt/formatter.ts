@@ -327,6 +327,8 @@ export function formatChannelHelp(): string {
     "`@bot leaderboard from 2026-01-01 to 2026-03-31` — limit to a date range (`to` optional)",
     "`@bot personal leaderboard` — show your own spending stats",
     "`@bot recommend [n]` — suggest n random places you've eaten before (default 5, max 25)",
+    "`@bot rate <restaurant> <0-10>` — rate a restaurant (re-rating updates your score)",
+    "`@bot rating <restaurant>` — average rating and everyone's scores for a restaurant",
     "`@bot addtotal <restaurant> <amount>` — manually log a receipt to the leaderboard",
     "`@bot new <location>` — Yelp restaurants near you, similar to your group's favorites, open for at least 2 more hours",
     "`@bot help` — show this message",

@@ -132,6 +132,15 @@ export function initDatabase(): void {
       user_id TEXT PRIMARY KEY,
       handle TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS restaurant_ratings (
+      guild_id TEXT NOT NULL,
+      restaurant_name TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      rating REAL NOT NULL,
+      rated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (guild_id, restaurant_name, user_id)
+    );
   `);
 
   // Migration: add discount_amount to existing databases that pre-date this column
