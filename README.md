@@ -214,7 +214,7 @@ Aliases are shown after the `/`. In a thread, the bot reads every reply; in a ch
 | `unclaim 1 3` / `uc 1 3` | Release claimed items |
 | `split 3 5 @user1 @user2` / `s ...` | Split item(s) between mentioned users (even, or `@user 30%` for uneven; proxy names allowed) |
 | `split all` / `s all` | Split every **unclaimed** item evenly among everyone on the receipt (claimed items are left untouched — never errors on them). Exclude items and/or users after `-`: `split all - 3 5 - @alice` |
-| `venmo <handle>` / `v <handle>` | Set the receipt poster's Venmo handle so each debtor's summary shows a **Pay with Venmo** button that pays the poster. Omit handle to see current; `venmo remove` to clear |
+| `venmo <handle>` / `v <handle>` | Set the receipt poster's Venmo handle so each debtor's summary (including proxy users) shows a **Pay with Venmo** button that pays the poster. Omit handle to see current; `venmo remove` to clear |
 | `roulette join` / `rj` | Opt in to the roulette pool |
 | `roulette leave` / `rl` | Leave the roulette pool |
 | `roulette spin` / `rs` | Run the roulette (opted-in users or primary user only) |

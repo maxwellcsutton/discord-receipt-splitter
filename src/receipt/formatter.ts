@@ -5,7 +5,7 @@ import {
   ButtonStyle,
 } from "discord.js";
 import { ReceiptSession, LineItem, UserTotal, SplitEntry } from "./types.js";
-import { DisplayNameResolver, isProxyUserId } from "../utils/discord.js";
+import { DisplayNameResolver } from "../utils/discord.js";
 import { formatOriginalCurrency } from "./currency.js";
 
 const INDENT = "\u2800"; // U+2800 braille blank — not stripped by Discord on first line
@@ -64,7 +64,6 @@ function shouldShowVenmoButton(
 ): boolean {
   if (!primaryVenmoHandle) return false;
   if (userId === session.primaryUserId) return false;
-  if (isProxyUserId(userId)) return false;
   if (grandTotal <= 0) return false;
   if (paid) return false;
   return true;
